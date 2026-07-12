@@ -18,7 +18,7 @@
 #include "core/Logger.hpp"
 
 #include "../../../shared/models/m3/M2Build.hpp"
-#include "../../../shared/models/m3/Md34Hots.hpp"
+#include "../../../shared/models/m3/Md34.hpp"
 #include "../../../shared/models/m3/Options.hpp"
 #include "../../../shared/textures/dds/Dds.hpp"
 

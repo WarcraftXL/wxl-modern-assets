@@ -1,5 +1,5 @@
 // MD34 reader for the HotS chunk-version family: reference-table container, model parse, and
-// animation-library parse. See Md34Hots.hpp for why this is HotS-specific and M3Model.hpp for
+// animation-library parse. See Md34.hpp for why this is HotS-specific and M3Model.hpp for
 // the generic types it populates.
 // Copyright (C) 2026 WarcraftXL
 //
@@ -16,7 +16,7 @@
 // You should have received a copy of the GNU General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
-#include "Md34Hots.hpp"
+#include "Md34.hpp"
 
 #include <cstring>
 
