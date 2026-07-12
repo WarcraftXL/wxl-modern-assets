@@ -61,10 +61,15 @@ namespace
     }
 
     // FileDataID -> path adapter for the WMO translate: routes to the host resolver (the DB2 path tables a
-    // module registers). Cold; called once per unresolved material texture reference.
+    // module registers). Cold; called once per unresolved material texture or doodad reference. A resolved
+    // texture (the material-texture call sites; a resolved doodad model is never a .blp) is marked as
+    // modern-sourced so BlpHost.cpp can scope its size cap to textures a modern WMO actually references,
+    // leaving native content untouched.
     bool ResolveThunk(void* /*user*/, uint32_t fileDataId, std::string& outPath)
     {
-        return wxl::host::ResolveFdid(fileDataId, outPath);
+        if (!wxl::host::ResolveFdid(fileDataId, outPath)) return false;
+        if (EndsWithCI(outPath, ".blp")) wxl::host::MarkModernTexture(outPath);
+        return true;
     }
 
     bool TransformWmo(std::string_view name, std::span<const uint8_t> raw, std::vector<uint8_t>& out)

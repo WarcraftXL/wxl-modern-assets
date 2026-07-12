@@ -38,6 +38,22 @@ namespace
     namespace m21 = wxl::modern::assets::m2::md21;
 
     /**
+     * @brief FileDataID -> path adapter for the MD21 de-chunk: routes to the host resolver and marks a
+     *        resolved path as modern-sourced (TXID always resolves a texture, never a model) so BlpHost.cpp
+     *        can scope its size cap to textures a modern M2 actually references, leaving native content
+     *        untouched.
+     * @param fileDataId  the id to resolve
+     * @param outPath     receives the resolved path
+     * @return true if the id resolved
+     */
+    bool ResolveThunk(uint32_t fileDataId, std::string& outPath)
+    {
+        if (!wxl::host::ResolveFdid(fileDataId, outPath)) return false;
+        wxl::host::MarkModernTexture(outPath);
+        return true;
+    }
+
+    /**
      * @brief Host Transform hook: reshapes a source M2 onto the client contract.
      * @param name Asset name (unused).
      * @param raw  Source asset bytes.
@@ -53,7 +69,7 @@ namespace
         if (m21::IsMd21(raw))
         {
             std::vector<uint8_t> md20;
-            if (!m21::Dechunk(raw, &wxl::host::ResolveFdid, md20)) return false;
+            if (!m21::Dechunk(raw, &ResolveThunk, md20)) return false;
             const uint32_t orig = static_cast<uint32_t>(md20.size());
             const uint32_t work = dp::WorkSize(md20.data(), orig);
             md20.resize(work);

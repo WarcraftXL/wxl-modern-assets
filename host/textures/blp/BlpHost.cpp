@@ -63,13 +63,17 @@ namespace
         if (!EndsWithCI(name, ".blp")) return false;
 
         // Cap oversized textures first (drops the top mip level), then transcode if the encoding needs it.
+        // Scoped to textures a modern M2/WMO/ADT source actually referenced (see Host.hpp MarkModernTexture):
+        // the cap exists for the 32-bit address-space pressure modern content adds, not for native archive
+        // textures, which the native game already ships at a size it was built to handle.
         // Tileset side maps (_h height, _s specular) stay at 1024: the consumers read one scalar channel,
         // and every extra 2048 chain multiplies the boot-time streaming volume and pool pressure.
         const bool sideMap = EndsWithCI(name, "_h.blp") || EndsWithCI(name, "_s.blp");
         const uint32_t maxEdge = (IsTilesetPath(name) && !sideMap) ? kMaxTilesetEdge : kMaxTextureEdge;
         std::vector<uint8_t> capped;
         std::span<const uint8_t> src = raw;
-        const bool didCap = wxl::modern::assets::textures::blp::CapBlpMips(raw, capped, maxEdge);
+        const bool didCap = wxl::host::IsModernTexture(name) &&
+            wxl::modern::assets::textures::blp::CapBlpMips(raw, capped, maxEdge);
         if (didCap) src = capped;
 
         std::vector<uint8_t> transcoded;
