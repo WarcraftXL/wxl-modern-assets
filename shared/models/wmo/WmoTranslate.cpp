@@ -22,6 +22,7 @@
 
 #include <cmath>
 #include <cstring>
+#include <iterator>
 #include <string>
 
 namespace wxl::modern::assets::wmo
@@ -36,12 +37,43 @@ namespace wxl::modern::assets::wmo
         using iff::Wr16;
         using iff::Wr32;
 
-        // Source shader id -> Client. 0..6 pass through; anything higher collapses to 0 (Diffuse). The real
-        // surface diffuse is always texture_1; a higher shader's 2nd texture is an alt-state/effects overlay
-        // (not a clean env map), so routing it through the Client env/two-layer combiners darkens the wall.
+        // Source shader id -> the Client's EXTERIOR effect table index (RE'd in wmo_material_shaders.md PART
+        // A/C against the 12340 decompile: the Client indexes s_wmoShaderMetaData/the effect tables directly
+        // by this field, unclamped -- an id past the table reads a garbage handle and faults the group draw,
+        // and the exterior table's own slot 6 is null (only the interior table has a two-layer composite
+        // effect). A single MOMT record has no interior/exterior context of its own (the same material can be
+        // drawn by both), so every id below targets what is safe for an EXTERIOR batch, the one choice that
+        // is never wrong regardless of which group ends up drawing it. 0..5 are already native; the rest
+        // picks the nearest trait the exterior table can express: env reflection (3/5/7/11/12/17) keeps
+        // texture_1/texture_2 as-is (verified against served WMO data with _scratch/wmo_dump.py -- texture_2
+        // already holds a usable second texture for this family, no slot promotion needed), everything else
+        // falls to the plain diffuse/opaque base layer already sitting in texture_1. Index 23 (UnkDFShader)
+        // is additionally special-cased by the caller (its base texture is promoted into texture_1 first).
+        constexpr uint8_t kShaderRemapTable[24] = {
+            0, 1, 2, 3, 4, 5,   // 0-5  native, unchanged
+            0,                  // 6  TwoLayerDiffuse        -> exterior has no composite slot
+            5,                  // 7  TwoLayerEnvMetal        -> env+metal
+            0,                  // 8  TwoLayerTerrain         -> base layer
+            0,                  // 9  DiffuseEmissive         -> base layer
+            4,                  // 10 waterWindow (FFX)       -> opaque
+            5,                  // 11 MaskedEnvMetal          -> env+metal
+            5,                  // 12 EnvMetalEmissive        -> env+metal
+            4,                  // 13 TwoLayerDiffuseOpaque   -> opaque base
+            4,                  // 14 submarineWindow (FFX)   -> opaque
+            0,                  // 15 TwoLayerDiffuseEmissive -> base layer
+            0,                  // 16 DiffuseTerrain          -> base layer
+            5,                  // 17 AdditiveMaskedEnvMetal  -> env+metal
+            0,                  // 18 TwoLayerDiffuseMod2x    -> base layer
+            0,                  // 19 TwoLayerDiffuseMod2xNA  -> base layer
+            0,                  // 20 TwoLayerDiffuseAlpha    -> base layer
+            0,                  // 21 Lod                     -> base layer
+            0,                  // 22 Parallax                -> base layer
+            0,                  // 23 UnkDFShader             -> base layer
+        };
+
         uint32_t RemapShader(uint32_t shader)
         {
-            return (shader <= kMaxNativeShader) ? shader : 0;
+            return (shader < std::size(kShaderRemapTable)) ? kShaderRemapTable[shader] : 0;
         }
 
         // Group liquid id -> Client. The Client indexes LiquidType with this value directly (no arithmetic),
@@ -132,8 +164,22 @@ namespace wxl::modern::assets::wmo
             }
         }
 
+        // A source no longer maintaining unknown_box at export zeroes all six fields (the relocation flag's
+        // material_id_large also overlaps its last two bytes). A zeroed box culls the batch as if it sat at
+        // the WMO's local origin instead of its real position; a batch genuinely that small at the origin is
+        // not a realistic case, so zero is unambiguously "unmaintained", not "authored".
+        bool IsMobaBoxZero(const uint8_t* entry)
+        {
+            for (uint32_t i = 0; i < 6; ++i)
+                if (Rd16(entry + kMobaBBoxOffset + 2 * i) != 0)
+                    return false;
+            return true;
+        }
+
         // MOBA material-id relocation: source builds put the id at +0x0A behind a flag at +0x16; the Client
-        // reads +0x17. Move it, clear the flag, rebuild the bbox. Returns the count relocated.
+        // reads +0x17. Move it, clear the flag, rebuild the bbox. A batch whose bbox already reads zero gets
+        // the same bbox rebuild even without the relocation flag, since a source can leave unknown_box
+        // unmaintained independently of using the large material id. Returns the count relocated.
         uint32_t FixMobaChunk(uint8_t* mobaData, uint32_t mobaLen, const uint8_t* movtData, uint32_t movtLen)
         {
             const uint32_t n         = mobaLen / kMobaEntryStride;
@@ -143,16 +189,20 @@ namespace wxl::modern::assets::wmo
             for (uint32_t i = 0; i < n; ++i)
             {
                 uint8_t* e = mobaData + i * kMobaEntryStride;
-                if ((e[kMobaFlagOffset] & kMobaRelocFlag) == 0)
-                    continue;
+                const bool reloc = (e[kMobaFlagOffset] & kMobaRelocFlag) != 0;
+                if (reloc)
+                {
+                    e[kMobaMatIdOffset] = e[kMobaModernMatOff];
+                    e[kMobaFlagOffset]  = 0;
+                    ++relocated;
+                }
 
-                e[kMobaMatIdOffset] = e[kMobaModernMatOff];
-                e[kMobaFlagOffset]  = 0;
-
-                const uint16_t start = Rd16(e + kMobaMinIndexOff);
-                const uint16_t end   = Rd16(e + kMobaMaxIndexOff);
-                FixMobaBox(e, movtData, movtVerts, start, end);
-                ++relocated;
+                if (reloc || IsMobaBoxZero(e))
+                {
+                    const uint16_t start = Rd16(e + kMobaMinIndexOff);
+                    const uint16_t end   = Rd16(e + kMobaMaxIndexOff);
+                    FixMobaBox(e, movtData, movtVerts, start, end);
+                }
             }
             return relocated;
         }
@@ -204,23 +254,19 @@ namespace wxl::modern::assets::wmo
                     if (m[kMomtRunTimeOffset + b]) { runTimeDirty = true; break; }
                 memset(m + kMomtRunTimeOffset, 0, kMomtRunTimeLen);
 
+                // Shader 23 keeps its real diffuse in texture_2 (texture_1 is a shared effects map used
+                // across many unrelated materials); promote it before the remap below picks its target.
                 const uint32_t shader = Rd32(m + kMomtShaderOffset);
-                if (modern)
+                if (shader == kShaderDFSurface)
+                    Wr32(m + kMomtTexOffsets[0], Rd32(m + kMomtTexOffsets[1]));
+
+                // Every source shader goes through the same nearest-match table, not just ids past 6: a
+                // "modern" source previously had ALL its shaders forced to 0 unconditionally, flattening
+                // natively-renderable env/specular/metal materials (1/2/3/5) to plain diffuse too.
+                const uint32_t remapped = RemapShader(shader);
+                if (remapped != shader)
                 {
-                    // Collapse to Diffuse on the real surface texture. Shader 23 keeps its diffuse in tex2
-                    // (tex1 is a shared effects map), so promote tex2. The dropped layer's additive overlay
-                    // (shine/emissive) is deferred to the multipass work.
-                    if (shader == kShaderDFSurface)
-                        Wr32(m + kMomtTexOffsets[0], Rd32(m + kMomtTexOffsets[1]));
-                    Wr32(m + kMomtShaderOffset, 0);
-                    if (shader != 0) shaderRemapped = true;
-                }
-                else if (shader > kMaxNativeShader)
-                {
-                    // A shader id past the Client's 0..6 indexes an unregistered effect handle (null) and
-                    // faults the group draw; collapse it to Diffuse. Shader 6 (two-layer) is kept: the group
-                    // down-convert preserves its 2nd texcoord/color set so the native two-layer pipe blends.
-                    Wr32(m + kMomtShaderOffset, RemapShader(shader));
+                    Wr32(m + kMomtShaderOffset, remapped);
                     shaderRemapped = true;
                 }
 
@@ -258,7 +304,7 @@ namespace wxl::modern::assets::wmo
                         fallbackOff = tex1;
                 }
 
-                if (shader > kMaxNativeShader)
+                if (remapped != shader)
                     ++collapsedShaders;
             }
             wxl::core::log::Printf("wmo-mat: mats=%u collapsed=%u mat0 shader=%u tex1=%s tex2=%s",
