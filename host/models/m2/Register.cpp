@@ -15,13 +15,17 @@
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 #include "Host.hpp"
+#include "mpq/MpqStore.hpp"
 
 #include "../../../shared/models/m2/Downport.hpp"
 #include "../../../shared/models/m2/Md21.hpp"
+#include "../../../shared/models/m2/Skel.hpp"
 
+#include <cctype>
 #include <cstdint>
 #include <cstring>
 #include <span>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -34,8 +38,35 @@
  */
 namespace
 {
-    namespace dp  = wxl::modern::assets::m2::downport;
-    namespace m21 = wxl::modern::assets::m2::md21;
+    namespace dp   = wxl::modern::assets::m2::downport;
+    namespace m21  = wxl::modern::assets::m2::md21;
+    namespace skel = wxl::modern::assets::m2::skel;
+
+    // Module-owned archive mount for the .skel sibling read; see AdtHost.cpp for why this is thread_local
+    // (one StormLib handle per host worker thread) rather than a shared instance under a lock.
+    thread_local wxl::host::mpq::MpqStore g_store;
+    thread_local bool g_mounted = false;
+    thread_local bool g_mountTried = false;
+
+    bool EnsureMounted()
+    {
+        if (g_mounted) return true;
+        if (g_mountTried) return false;
+        g_mountTried = true;
+        const std::string root = wxl::host::ClientRoot();
+        g_mounted = !root.empty() && g_store.Mount(root);
+        return g_mounted;
+    }
+
+    bool EndsWithCI(std::string_view s, std::string_view suffix)
+    {
+        if (suffix.size() > s.size()) return false;
+        const size_t off = s.size() - suffix.size();
+        for (size_t i = 0; i < suffix.size(); ++i)
+            if (std::tolower(static_cast<unsigned char>(s[off + i])) !=
+                std::tolower(static_cast<unsigned char>(suffix[i]))) return false;
+        return true;
+    }
 
     /**
      * @brief FileDataID -> path adapter for the MD21 de-chunk: routes to the host resolver and marks a
@@ -55,7 +86,7 @@ namespace
 
     /**
      * @brief Host Transform hook: reshapes a source M2 onto the client contract.
-     * @param name Asset name (unused).
+     * @param name Asset name; used to find a .skel sibling for a split-skeleton source model.
      * @param raw  Source asset bytes.
      * @param out  Receives the reshaped image on success.
      * @return true if the asset was reshaped; false (pass) for anything that is not a source image, so the
@@ -63,13 +94,25 @@ namespace
      */
     bool Transform(std::string_view name, std::span<const uint8_t> raw, std::vector<uint8_t>& out)
     {
-        (void)name;
         const uint32_t size = static_cast<uint32_t>(raw.size());
 
         if (m21::IsMd21(raw))
         {
             std::vector<uint8_t> md20;
             if (!m21::Dechunk(raw, &ResolveThunk, md20)) return false;
+
+            // A split-skeleton source (bones/sequences/attachments moved out of the MD20 body) ships a
+            // sibling .skel file next to the .m2; splice it back in before the downport runs so bones and
+            // sequences reach it and the client's bone-budget split at skin finalize.
+            if (EndsWithCI(name, ".m2") && EnsureMounted())
+            {
+                std::string skelName(name.substr(0, name.size() - 3));
+                skelName += ".skel";
+                std::vector<uint8_t> skelBytes;
+                if (g_store.ReadAll(skelName, skelBytes))
+                    skel::Merge(skelBytes, md20);
+            }
+
             const uint32_t orig = static_cast<uint32_t>(md20.size());
             const uint32_t work = dp::WorkSize(md20.data(), orig);
             md20.resize(work);
