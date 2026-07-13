@@ -38,7 +38,8 @@ namespace wxl::modern::assets::m2::md21
     // maps a texture FileDataID to a path. Returns false when `in` is not an MD21 container or is malformed.
     bool Dechunk(std::span<const uint8_t> in, TxidResolver resolve, std::vector<uint8_t>& out);
 
-    // Zero the bone lookup table (boneCombos) so skinned/shadow geometry resolves to the root bone. A static
-    // doodad's shadow then stops swinging with the camera. Operates on an MD20 image in place.
+    // Zero the bone lookup table (boneCombos) so a static prop's shadow stops swinging with the camera.
+    // Scoped to models whose boneCombos looks like that case (few distinct bones, none billboard); a real
+    // skeleton (creature/character) is left untouched. Operates on an MD20 image in place.
     void ZeroBoneLookup(uint8_t* md20, uint32_t size);
 }
