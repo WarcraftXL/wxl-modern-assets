@@ -18,6 +18,7 @@
 
 #include "core/Logger.hpp"
 
+#include <cctype>
 #include <cstdlib>
 #include <cstring>
 #include <vector>
@@ -33,6 +34,33 @@ namespace wxl::modern::assets::m2::skin
         // A texunit shaderId >= this is a source shader-effect index (named modern effect), not a packed
         // blend-bit pair; it is decoded by the effect-index branch below.
         constexpr uint16_t kSourceShaderMin = 0x8000;
+
+        bool StartsWithCI(const char* value, const char* prefix)
+        {
+            if (!value || !prefix) return false;
+            while (*prefix)
+            {
+                const char aRaw = (*value == '/') ? '\\' : *value;
+                const char bRaw = (*prefix == '/') ? '\\' : *prefix;
+                if (std::tolower(static_cast<unsigned char>(aRaw)) !=
+                    std::tolower(static_cast<unsigned char>(bRaw))) return false;
+                ++value;
+                ++prefix;
+            }
+            return true;
+        }
+
+        bool UsesExtendedIndexStart(const char* name)
+        {
+            return StartsWithCI(name, "character\\") ||
+                   StartsWithCI(name, "item\\objectcomponents\\");
+        }
+
+        uint32_t FullIndexStart(const fmt::M2SkinSection& section, bool extended)
+        {
+            return extended ? ((static_cast<uint32_t>(section.level) << 16) | section.indexStart)
+                            : static_cast<uint32_t>(section.indexStart);
+        }
 
         /**
          * @brief Appends an entry, returning the index of an existing single-entry match or the new slot.
@@ -93,16 +121,27 @@ namespace wxl::modern::assets::m2::skin
          * @param skin      Live skin profile whose submeshes are adjusted in place.
          * @param badSubmesh Receives a per-submesh flag, set for zero-geometry sections.
          */
-        void FixSubmeshes(fmt::M2Header* md, Skin* skin, std::vector<uint8_t>& badSubmesh)
+        void FixSubmeshes(fmt::M2Header* md, Skin* skin, std::vector<uint8_t>& badSubmesh,
+                          bool extendedIndexStart)
         {
             badSubmesh.assign(skin->submeshCount, 0);
             for (uint32_t i = 0; i < skin->submeshCount; ++i)
             {
                 auto* s = &skin->submeshes[i];
-                if (s->level > 0)
+                if (s->level > 0 && !extendedIndexStart)
                 {
                     s->level = 0; s->vertexStart = 0; s->vertexCount = 0; s->indexStart = 0;
                     s->indexCount = 0; s->boneComboIndex = 0; s->centerBoneIndex = 0;
+                }
+                else if (s->indexCount != 0)
+                {
+                    const uint32_t start = FullIndexStart(*s, extendedIndexStart);
+                    if (start > skin->indexCount || s->indexCount > skin->indexCount - start)
+                    {
+                        WLOG_WARN("modern-assets: submesh %u index window past skin indexCount, parking", i);
+                        s->level = 0; s->vertexStart = 0; s->vertexCount = 0; s->indexStart = 0;
+                        s->indexCount = 0; s->boneComboIndex = 0; s->centerBoneIndex = 0;
+                    }
                 }
 
                 if (s->indexCount == 0)
@@ -378,7 +417,8 @@ namespace wxl::modern::assets::m2::skin
         // The bone split itself already ran unconditionally (ModernM2::OnSkinFinalize) before this is
         // called; splitMap is that result. FixSubmeshes/FixTexUnits below operate on the already-split
         // skin->submeshes and combine the split re-point with this source's shaderId decode.
-        FixSubmeshes(md, skin, badSubmesh);
+        const bool extendedIndexStart = UsesExtendedIndexStart(name);
+        FixSubmeshes(md, skin, badSubmesh, extendedIndexStart);
         FixTexUnits(skin, badSubmesh, splitMap, batches, texUnitLookup, blendOverride, nTransparencyLookup);
 
         // Commit the rebuilt batch array BEFORE native finalize sizes its parallel block from
