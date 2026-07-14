@@ -114,9 +114,9 @@ namespace
             }
 
             const uint32_t orig = static_cast<uint32_t>(md20.size());
-            const uint32_t work = dp::WorkSize(md20.data(), orig);
+            const uint32_t work = dp::WorkSize(md20.data(), orig, name);
             md20.resize(work);
-            if (!dp::ProcessInPlace(md20.data(), orig, work)) return false;
+            if (!dp::ProcessInPlace(md20.data(), orig, work, name)) return false;
             m21::ZeroBoneLookup(md20.data(), static_cast<uint32_t>(md20.size()));
             out = std::move(md20);
             return true;
@@ -124,10 +124,10 @@ namespace
 
         if (!dp::IsConvertible(raw.data(), size)) return false;
 
-        const uint32_t workSize = dp::WorkSize(raw.data(), size);
+        const uint32_t workSize = dp::WorkSize(raw.data(), size, name);
         out.resize(workSize);
         std::memcpy(out.data(), raw.data(), size);
-        if (!dp::ProcessInPlace(out.data(), size, workSize)) { out.clear(); return false; }
+        if (!dp::ProcessInPlace(out.data(), size, workSize, name)) { out.clear(); return false; }
         return true;
     }
 

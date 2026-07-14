@@ -26,9 +26,36 @@
 #include "Ribbons.hpp"
 #include "Textures.hpp"
 
+#include <cctype>
+#include <string_view>
+
 namespace wxl::modern::assets::m2::downport
 {
     namespace fmt = wxl::structure::m2;
+
+    namespace
+    {
+        bool StartsWithCI(std::string_view value, std::string_view prefix)
+        {
+            if (prefix.size() > value.size()) return false;
+            for (size_t i = 0; i < prefix.size(); ++i)
+            {
+                const char aRaw = value[i] == '/' ? '\\' : value[i];
+                const char bRaw = prefix[i] == '/' ? '\\' : prefix[i];
+                const auto a = static_cast<unsigned char>(aRaw);
+                const auto b = static_cast<unsigned char>(bRaw);
+                if (std::tolower(a) != std::tolower(b)) return false;
+            }
+            return true;
+        }
+
+        bool RepairsTextureLoops(std::string_view name)
+        {
+            return StartsWithCI(name, "item\\") ||
+                   StartsWithCI(name, "creature\\") ||
+                   StartsWithCI(name, "character\\");
+        }
+    }
 
     /**
      * @brief Reports whether a buffer is an MD20 image in the source version range this module reshapes.
@@ -72,12 +99,17 @@ namespace wxl::modern::assets::m2::downport
      * @param size    Source length.
      * @return Source size, plus two bytes for the synthesized texture-coordinate-combos tail when needed.
      */
-    uint32_t WorkSize(const void* buffer, uint32_t size)
+    uint32_t WorkSize(const void* buffer, uint32_t size, std::string_view name)
     {
         if (!IsConvertible(buffer, size)) return size;
-        // The texture-coordinate-combos synth appends two bytes (the one record the client skin
-        // finalize indexes when the source omits it); everything else reshapes within the existing bytes.
-        return textures::NeedsCoordCombos(static_cast<const fmt::M2Header*>(buffer)) ? size + 2 : size;
+        const auto* md = static_cast<const fmt::M2Header*>(buffer);
+
+        uint32_t workSize = size;
+        if (textures::NeedsCoordCombos(md))
+            workSize += 2;
+        if (RepairsTextureLoops(name))
+            workSize += textures::TextureTransformLoopRepairExtraBytes(md, size, workSize, name);
+        return workSize;
     }
 
     /**
@@ -87,7 +119,7 @@ namespace wxl::modern::assets::m2::downport
      * @param workSize  Total work-buffer length.
      * @return True on success; false when work is not a source image or workSize is too small for the grow.
      */
-    bool ProcessInPlace(void* work, uint32_t origSize, uint32_t workSize)
+    bool ProcessInPlace(void* work, uint32_t origSize, uint32_t workSize, std::string_view name)
     {
         if (!work || workSize < origSize) return false;
 
@@ -98,7 +130,11 @@ namespace wxl::modern::assets::m2::downport
         if (md->version < kSourceVersionMin || md->version > kSourceVersionMax) return false;
 
         const bool grow = textures::NeedsCoordCombos(md);
-        if (grow && workSize < origSize + 2) return false; // caller under-sized the buffer
+        uint32_t appendOffset = origSize;
+        if (grow) appendOffset += 2;
+        const uint32_t loopExtra = RepairsTextureLoops(name)
+            ? textures::TextureTransformLoopRepairExtraBytes(md, origSize, appendOffset) : 0;
+        if (workSize < appendOffset + loopExtra) return false; // caller under-sized the buffer
 
         // Each theme compacts within the original body size (the body keeps its byte positions).
         cameras::Compact(md);
@@ -108,6 +144,14 @@ namespace wxl::modern::assets::m2::downport
 
         if (grow)
             textures::SynthCoordCombos(md, origSize); // the appended entry lives at the original tail
+
+        if (RepairsTextureLoops(name))
+        {
+            const uint32_t repaired = textures::RepairTextureTransformLoops(md, origSize, appendOffset, workSize, name);
+            if (repaired)
+                WLOG_INFO("modern-m2: '%.*s' repaired %u pre-parse texture-transform loop(s)",
+                          int(name.size()), name.data(), repaired);
+        }
 
         // Stage, do not finalize: the body now matches the client contract, but the version carries the
         // staging bit so the DLL recognizes a compacted image and finalizes it (the client accepts only the
