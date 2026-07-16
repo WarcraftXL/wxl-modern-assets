@@ -24,10 +24,15 @@
 #include "../../../shared/models/m2/Downport.hpp"
 #include "../../../shared/models/m2/Particles.hpp"
 #include "../../../shared/models/m2/Ribbons.hpp"
+#include "../../../shared/models/m2/Textures.hpp"
 #include "../../common/BoneBudget.hpp"
 #include "Skin.hpp"
 
+#include <windows.h>
+
+#include <cctype>
 #include <cstring>
+#include <string_view>
 
 namespace wxl::modern::assets::m2
 {
@@ -35,6 +40,53 @@ namespace wxl::modern::assets::m2
     namespace m2  = wxl::game::m2;
     namespace fmt = wxl::structure::m2;
     namespace bn  = wxl::modern::assets::common::bones;
+    namespace tex = wxl::modern::assets::m2::textures;
+
+    namespace
+    {
+        bool SkinRebuildEnabled()
+        {
+            static const bool enabled = [] {
+                char env[16]{};
+                const DWORD n = GetEnvironmentVariableA("WXL_MODERN_M2_SKIN_REBUILD", env, sizeof env);
+                if (n > 0 && (env[0] == '0' || env[0] == 'n' || env[0] == 'N')) return false;
+                return GetFileAttributesA("WarcraftXL_modern_m2_skin_rebuild.disable") ==
+                       INVALID_FILE_ATTRIBUTES;
+            }();
+            return enabled;
+        }
+
+        bool StartsWithCI(const char* value, const char* prefix)
+        {
+            if (!value || !prefix) return false;
+            while (*prefix)
+            {
+                const char aRaw = (*value == '/') ? '\\' : *value;
+                const char bRaw = (*prefix == '/') ? '\\' : *prefix;
+                if (std::tolower(static_cast<unsigned char>(aRaw)) !=
+                    std::tolower(static_cast<unsigned char>(bRaw))) return false;
+                ++value;
+                ++prefix;
+            }
+            return true;
+        }
+
+        bool AllowsObjectSkinRemapPath(const char* path)
+        {
+            if (StartsWithCI(path, "creature\\") || StartsWithCI(path, "character\\")) return true;
+            if (!StartsWithCI(path, "item\\objectcomponents\\")) return false;
+            return !StartsWithCI(path, "item\\objectcomponents\\weapon\\");
+        }
+
+        void RemapWeaponBladeTextures(void* model, fmt::M2Header* header, uint32_t size)
+        {
+            if (!model || !header || !AllowsObjectSkinRemapPath(m2::PathStem(model))) return;
+            const auto patched = tex::FixWeaponBladeTextureTypes(header, size);
+            if (patched.Total())
+                WLOG_INFO("modern-assets: %s fixed WEAPON_BLADE textures objectSkin=%u hardcoded=%u",
+                          m2::PathStem(model), patched.toObjectSkin, patched.toHardcoded);
+        }
+    }
 
     /**
      * @brief Binds the module's handlers to the core M2 events.
@@ -75,6 +127,7 @@ namespace wxl::modern::assets::m2
         // the staging bit to hand the parser the clean native version, then register it.
         if (IsStagedVersion(md->version))
         {
+            RemapWeaponBladeTextures(a.model, md, size);
             md->version &= ~kStagedVersionBit;
             registry_.Remember(a.model);
             return;
@@ -86,18 +139,20 @@ namespace wxl::modern::assets::m2
         if (!downport::IsConvertible(buf, size)) return;
         downport::Inspect(buf, size);
 
-        const uint32_t workSize = downport::WorkSize(buf, size);
+        const char* pathStem = m2::PathStem(a.model);
+        const std::string_view path = pathStem ? pathStem : "";
+        const uint32_t workSize = downport::WorkSize(buf, size, path);
         void* image = buf;
         if (workSize == size)
         {
-            if (!downport::ProcessInPlace(buf, size, size)) return;
+            if (!downport::ProcessInPlace(buf, size, size, path)) return;
         }
         else
         {
             void* out = m2::AllocBuffer(workSize, ".\\wxl-modern-assets");
             if (!out) return;
             std::memcpy(out, buf, size);
-            if (!downport::ProcessInPlace(out, size, workSize)) { m2::FreeBuffer(out); return; }
+            if (!downport::ProcessInPlace(out, size, workSize, path)) { m2::FreeBuffer(out); return; }
             m2::ReplaceBuffer(a.model, out, workSize); // parser now reads the grown image
             m2::FreeBuffer(buf);                        // release the original source bytes
             image = out;
@@ -105,7 +160,9 @@ namespace wxl::modern::assets::m2
 
         // ProcessInPlace staged the version; finalize it to the native value so the parser accepts it, then
         // register the model (no longer distinguishable by version at draw time) for the live-engine half.
-        static_cast<fmt::M2Header*>(image)->version &= ~kStagedVersionBit;
+        auto* imageHeader = static_cast<fmt::M2Header*>(image);
+        RemapWeaponBladeTextures(a.model, imageHeader, workSize);
+        imageHeader->version &= ~kStagedVersionBit;
         registry_.Remember(a.model);
         WLOG_INFO("modern-m2: reshaped M2 to 264 (%u -> %u bytes)", size, workSize);
     }
@@ -138,12 +195,14 @@ namespace wxl::modern::assets::m2
         std::vector<bn::SplitSection> sections;
         std::vector<bn::SplitRun> splitMap;
         uint32_t splitCount = 0;
-        const bool split = bn::SplitSubmeshes(md, sk, sections, splitMap, splitCount, "") && splitCount > 0;
+        const char* pathStem = m2::PathStem(a.model);
+        const bool split = bn::SplitSubmeshes(md, sk, sections, splitMap, splitCount,
+                                              pathStem ? pathStem : "") && splitCount > 0;
         if (split)
             WLOG_INFO("modern-assets: bone-splitter produced %u extra sub-draw(s)", splitCount);
 
-        if (registry_.Contains(a.model))
-            skin::Rebuild(md, sk, splitMap, ""); // full modern-M2 contract rebuild, split-aware
+        if (registry_.Contains(a.model) && SkinRebuildEnabled())
+            skin::Rebuild(md, sk, splitMap, pathStem ? pathStem : ""); // full modern-M2 contract rebuild
         else if (split)
             bn::RepointBatchesAfterSplit(sk, splitMap); // native / other-origin content: structural repoint only
     }

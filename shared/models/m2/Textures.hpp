@@ -18,6 +18,8 @@
 
 #include "structure/m2/M2Format.hpp"
 
+#include <string_view>
+
 /**
  * @brief Synthesizes the texture-coordinate-combos array a source model omits.
  *
@@ -41,4 +43,47 @@ namespace wxl::modern::assets::m2::textures
      * @param appendOffset  Model-relative offset where the entry is written.
      */
     void SynthCoordCombos(wxl::structure::m2::M2Header* md, uint32_t appendOffset);
+
+    /**
+     * @brief Computes extra bytes needed to append a repaired global-loop table for texture transforms.
+     * @param md            Model header with file-relative offsets.
+     * @param fileSize      Original model byte size.
+     * @param appendOffset  Offset where prior grow steps would leave the cursor.
+     * @return Extra bytes including alignment, or 0 when no loop repair is needed.
+     */
+    uint32_t TextureTransformLoopRepairExtraBytes(const wxl::structure::m2::M2Header* md,
+                                                  uint32_t fileSize, uint32_t appendOffset,
+                                                  std::string_view name = {});
+
+    /**
+     * @brief Rewrites one-shot/invalid texture-transform tracks to a global loop before native parse.
+     * @param md            Model header with file-relative offsets.
+     * @param fileSize      Original model byte size for bounds checks.
+     * @param appendOffset  Offset where the repaired global-loop table may be written.
+     * @param workSize      Total work-buffer size.
+     * @return Count of repaired tracks.
+     */
+    uint32_t RepairTextureTransformLoops(wxl::structure::m2::M2Header* md, uint32_t fileSize,
+                                         uint32_t appendOffset, uint32_t workSize,
+                                         std::string_view name = {});
+
+    struct WeaponBladeFixResult
+    {
+        uint32_t toObjectSkin = 0;
+        uint32_t toHardcoded = 0;
+
+        uint32_t Total() const { return toObjectSkin + toHardcoded; }
+    };
+
+    /**
+     * @brief Rewrites source WEAPON_BLADE slots into a client-readable texture type.
+     *
+     * Some modern actor/item models incorrectly carry their primary skin texture as WEAPON_BLADE. If the slot
+     * has no concrete filename, OBJECT_SKIN keeps the old replaceable-texture behavior. If a TXID/filename was
+     * resolved, HARDCODED preserves that included texture instead of letting OBJECT_SKIN ignore it.
+     * @param md        Model header.
+     * @param fileSize  Model byte size for bounds checks.
+     * @return Counts of texture records rewritten.
+     */
+    WeaponBladeFixResult FixWeaponBladeTextureTypes(wxl::structure::m2::M2Header* md, uint32_t fileSize);
 }

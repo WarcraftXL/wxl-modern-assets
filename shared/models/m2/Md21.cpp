@@ -20,6 +20,8 @@
 #include "core/Logger.hpp"
 #include "structure/m2/M2Format.hpp"
 
+#include <cctype>
+#include <cstdlib>
 #include <string>
 
 namespace wxl::modern::assets::m2::md21
@@ -28,6 +30,17 @@ namespace wxl::modern::assets::m2::md21
 
     namespace
     {
+        bool VerboseAssetLogs()
+        {
+            static const bool enabled = [] {
+                const char* raw = std::getenv("WXL_VERBOSE_ASSET_LOGS");
+                if (!raw || !*raw) raw = std::getenv("WXL_ASSET_LOGS");
+                if (!raw || !*raw) return false;
+                const char c = static_cast<char>(std::tolower(static_cast<unsigned char>(*raw)));
+                return c != '0' && c != 'n' && c != 'f';
+            }();
+            return enabled;
+        }
         // Auxiliary chunk magics are stored in memory order (not reversed), so a plain little-endian read
         // matches these.
         constexpr uint32_t Magic(char a, char b, char c, char d)
@@ -152,8 +165,9 @@ namespace wxl::modern::assets::m2::md21
             ++inlined;
         }
 
-        wxl::core::log::Printf("modern-m2 md21: md20=%u textures=%u hardcoded=%u inlined=%u txid=%zu",
-            md20Size, texCount, hardcoded, inlined, txid.size());
+        if (VerboseAssetLogs())
+            wxl::core::log::Printf("modern-m2 md21: md20=%u textures=%u hardcoded=%u inlined=%u txid=%zu",
+                md20Size, texCount, hardcoded, inlined, txid.size());
         return true;
     }
 

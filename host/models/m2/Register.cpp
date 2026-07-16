@@ -17,6 +17,8 @@
 #include "Host.hpp"
 #include "mpq/MpqStore.hpp"
 
+#include "EquipmentFixes.hpp"
+
 #include "../../../shared/models/m2/Downport.hpp"
 #include "../../../shared/models/m2/Md21.hpp"
 #include "../../../shared/models/m2/Skel.hpp"
@@ -39,6 +41,7 @@
 namespace
 {
     namespace dp   = wxl::modern::assets::m2::downport;
+    namespace equip = wxl::modern::assets::m2::equipment;
     namespace m21  = wxl::modern::assets::m2::md21;
     namespace skel = wxl::modern::assets::m2::skel;
 
@@ -114,20 +117,24 @@ namespace
             }
 
             const uint32_t orig = static_cast<uint32_t>(md20.size());
-            const uint32_t work = dp::WorkSize(md20.data(), orig);
+            const uint32_t work = dp::WorkSize(md20.data(), orig, name);
             md20.resize(work);
-            if (!dp::ProcessInPlace(md20.data(), orig, work)) return false;
+            if (!dp::ProcessInPlace(md20.data(), orig, work, name)) return false;
             m21::ZeroBoneLookup(md20.data(), static_cast<uint32_t>(md20.size()));
+            equip::FixObjectSkinTextureTypes(name, md20);
+            equip::ApplyHelmOffset(name, md20);
             out = std::move(md20);
             return true;
         }
 
         if (!dp::IsConvertible(raw.data(), size)) return false;
 
-        const uint32_t workSize = dp::WorkSize(raw.data(), size);
+        const uint32_t workSize = dp::WorkSize(raw.data(), size, name);
         out.resize(workSize);
         std::memcpy(out.data(), raw.data(), size);
-        if (!dp::ProcessInPlace(out.data(), size, workSize)) { out.clear(); return false; }
+        if (!dp::ProcessInPlace(out.data(), size, workSize, name)) { out.clear(); return false; }
+        equip::FixObjectSkinTextureTypes(name, out);
+        equip::ApplyHelmOffset(name, out);
         return true;
     }
 

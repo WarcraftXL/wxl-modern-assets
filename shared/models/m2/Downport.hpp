@@ -17,6 +17,7 @@
 #pragma once
 
 #include <cstdint>
+#include <string_view>
 
 /**
  * @brief Pre-parse orchestrator that reshapes a source MD20 image onto the client M2 contract.
@@ -57,7 +58,7 @@ namespace wxl::modern::assets::m2::downport
      * @param size    Source length.
      * @return Required work-buffer size in bytes.
      */
-    uint32_t WorkSize(const void* buffer, uint32_t size);
+    uint32_t WorkSize(const void* buffer, uint32_t size, std::string_view name = {});
 
     /**
      * @brief Reshapes an already-copied image in place onto the client contract.
@@ -69,5 +70,5 @@ namespace wxl::modern::assets::m2::downport
      * @param workSize  Total work-buffer length.
      * @return True on success; false when work is not a source image or workSize is too small for the grow.
      */
-    bool ProcessInPlace(void* work, uint32_t origSize, uint32_t workSize);
+    bool ProcessInPlace(void* work, uint32_t origSize, uint32_t workSize, std::string_view name = {});
 }

@@ -1,4 +1,4 @@
-// Host face for blp: serves an uncompressed-BGRA texture as a DXT5 texture the Client reads.
+// Host face for wxl-modern-blp: serves an uncompressed-BGRA texture as a DXT5 texture the Client reads.
 // Copyright (C) 2026 WarcraftXL
 //
 // This program is free software: you can redistribute it and/or modify
@@ -21,8 +21,11 @@
 #include "../../../shared/textures/blp/BlpTranscode.hpp"
 
 #include <cctype>
+#include <cstdio>
 #include <cstdint>
+#include <cstdlib>
 #include <span>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -40,56 +43,218 @@ namespace
         return true;
     }
 
-    // Larger edge a served texture is capped to, by content class. Terrain tilesets serve at native
-    // 2048 (the client widens its boot-time mip scratch to fit 2048-wide chains, WidenMipScratch;
-    // the visible tileset set is small so the extra footprint is bounded). Every other texture keeps
-    // the 1024 cap: modern model/WMO art is the main consumer of the client's tight 32-bit address
-    // space, and serving it all at 2048 starves the managed texture pool (allocation failures render
-    // the client's solid default texture).
-    constexpr uint32_t kMaxTilesetEdge = 2048;
-    constexpr uint32_t kMaxTextureEdge = 1024;
-
-    bool IsTilesetPath(std::string_view name)
+    bool StartsWithCI(std::string_view s, std::string_view prefix)
     {
-        static constexpr std::string_view prefix = "tileset";
-        if (name.size() < prefix.size() + 1) return false;
+        if (prefix.size() > s.size()) return false;
         for (size_t i = 0; i < prefix.size(); ++i)
-            if (std::tolower(static_cast<unsigned char>(name[i])) != prefix[i]) return false;
-        return name[prefix.size()] == '\\' || name[prefix.size()] == '/';
+            if (std::tolower(static_cast<unsigned char>(s[i])) !=
+                std::tolower(static_cast<unsigned char>(prefix[i]))) return false;
+        return true;
     }
+
+    bool IsTextureComponent(std::string_view name)
+    {
+        return StartsWithCI(name, "item\\texturecomponents\\")
+            || StartsWithCI(name, "item/texturecomponents/");
+    }
+
+    bool IsWorldTexture(std::string_view name)
+    {
+        return StartsWithCI(name, "world\\")
+            || StartsWithCI(name, "world/");
+    }
+
+    bool IsEnvironmentTexture(std::string_view name)
+    {
+        return IsWorldTexture(name)
+            || StartsWithCI(name, "dungeon\\")
+            || StartsWithCI(name, "dungeon/")
+            || StartsWithCI(name, "dungeons\\")
+            || StartsWithCI(name, "dungeons/")
+            || StartsWithCI(name, "environment\\")
+            || StartsWithCI(name, "environment/")
+            || StartsWithCI(name, "tileset\\")
+            || StartsWithCI(name, "tileset/");
+    }
+
+    bool EnvTruthy(const char* raw)
+    {
+        if (!raw || !*raw) return false;
+        const char c = static_cast<char>(std::tolower(static_cast<unsigned char>(*raw)));
+        return c != '0' && c != 'n' && c != 'f';
+    }
+
+    bool VerboseAssetLogs()
+    {
+        static const bool enabled = []() {
+            const char* raw = std::getenv("WXL_VERBOSE_ASSET_LOGS");
+            if (!raw || !*raw) raw = std::getenv("WXL_ASSET_LOGS");
+            return EnvTruthy(raw);
+        }();
+        return enabled;
+    }
+
+    int FindConfigInt(const std::string& text, const char* key, int fallback)
+    {
+        const std::string needle = std::string("SET ") + key;
+        size_t pos = text.find(needle);
+        if (pos == std::string::npos) return fallback;
+        pos += needle.size();
+        while (pos < text.size() && std::isspace(static_cast<unsigned char>(text[pos]))) ++pos;
+        if (pos < text.size() && text[pos] == '"') ++pos;
+        bool neg = false;
+        if (pos < text.size() && text[pos] == '-') { neg = true; ++pos; }
+        int value = 0;
+        bool any = false;
+        while (pos < text.size() && std::isdigit(static_cast<unsigned char>(text[pos])))
+        {
+            any = true;
+            value = value * 10 + int(text[pos] - '0');
+            ++pos;
+        }
+        if (!any) return fallback;
+        return neg ? -value : value;
+    }
+
+    double FindConfigNumber(const std::string& text, const char* key, double fallback)
+    {
+        const std::string needle = std::string("SET ") + key;
+        size_t pos = text.find(needle);
+        if (pos == std::string::npos) return fallback;
+        pos += needle.size();
+        while (pos < text.size() && std::isspace(static_cast<unsigned char>(text[pos]))) ++pos;
+        if (pos < text.size() && text[pos] == '"') ++pos;
+        char* end = nullptr;
+        const char* begin = text.c_str() + pos;
+        const double value = std::strtod(begin, &end);
+        return end == begin ? fallback : value;
+    }
+
+    std::string ReadTextFile(const std::string& path)
+    {
+        FILE* f = std::fopen(path.c_str(), "rb");
+        if (!f) return {};
+        std::string text;
+        char buf[4096];
+        for (;;)
+        {
+            const size_t n = std::fread(buf, 1, sizeof(buf), f);
+            if (n) text.append(buf, n);
+            if (n < sizeof(buf)) break;
+        }
+        std::fclose(f);
+        return text;
+    }
+
+    const std::string& ClientConfigText()
+    {
+        static std::string cfg = []() {
+            const std::string root = wxl::host::ClientRoot();
+            return root.empty()
+                ? ReadTextFile("WTF\\Config.wtf")
+                : ReadTextFile(root + "\\WTF\\Config.wtf");
+        }();
+        return cfg;
+    }
+
+    uint32_t ConfiguredTextureEdge(const char* envKey, const char* configKey, uint32_t fallback)
+    {
+        const char* env = std::getenv(envKey);
+        if (env && *env)
+        {
+            const unsigned long edge = std::strtoul(env, nullptr, 10);
+            if (edge >= 64 && edge <= 4096) return static_cast<uint32_t>(edge);
+        }
+
+        const int configured = FindConfigInt(ClientConfigText(), configKey, 0);
+        if (configured >= 64 && configured <= 4096)
+            return static_cast<uint32_t>(configured);
+
+        return fallback;
+    }
+
+    uint32_t ComponentTextureMaxEdge()
+    {
+        // Function-local static initialization is synchronized by C++11, unlike the former manual
+        // loaded flag which raced when the prefetch pool and serve thread transformed their first BLP.
+        static const uint32_t maxEdge = []() {
+            const int componentLevel = FindConfigInt(ClientConfigText(), "componentTextureLevel", 0);
+            uint32_t edge = 256;
+            if (componentLevel >= 9) edge = 1024;
+            else if (componentLevel >= 8) edge = 512;
+            wxl::core::log::Printf("modern-blp: componentTextureLevel=%d componentMaxEdge=%u",
+                                   componentLevel, edge);
+            return edge;
+        }();
+        return maxEdge;
+    }
+
+    uint32_t EnvironmentTextureMaxEdge()
+    {
+        static uint32_t maxEdge = []() {
+            // Follow WoW's environment-detail axis for Low/custom profiles. Medium through Ultra retain the
+            // established 512 cap; explicit WXL environment/world overrides remain authoritative.
+            const double detail = FindConfigNumber(ClientConfigText(), "environmentDetail", 1.0);
+            const uint32_t presetEdge = detail < 0.75 ? 256u : 512u;
+            const uint32_t edge = ConfiguredTextureEdge("WXL_ENV_TEXTURE_MAX_EDGE",
+                                                       "environmentTextureMaxEdge",
+                                                       ConfiguredTextureEdge("WXL_WORLD_TEXTURE_MAX_EDGE",
+                                                                             "worldTextureMaxEdge", presetEdge));
+            wxl::core::log::Printf("modern-blp: environmentDetail=%.2f environmentTextureMaxEdge=%u",
+                                   detail, edge);
+            return edge;
+        }();
+        return maxEdge;
+    }
+
+    // Larger edge a served terrain/model texture is capped to. Oversized modern art (2048/4096) is the
+    // main consumer of the client's tight 32-bit address space; serving its existing 1024 mip cuts that
+    // ~4x with no decode and no client change.
+    constexpr uint32_t kMaxTextureEdge = 1024;
 
     bool TransformBlp(std::string_view name, std::span<const uint8_t> raw, std::vector<uint8_t>& out)
     {
         if (!EndsWithCI(name, ".blp")) return false;
 
+        const uint32_t componentMaxEdge = ComponentTextureMaxEdge();
+        if (IsTextureComponent(name) && wxl::modern::assets::textures::blp::TextureComponentToPaletted(raw, out, componentMaxEdge))
+        {
+            if (VerboseAssetLogs())
+                wxl::core::log::Printf("modern-blp: %.*s DXT component->paletted maxEdge=%u (%u -> %u bytes)",
+                    int(name.size()), name.data(), componentMaxEdge, uint32_t(raw.size()), uint32_t(out.size()));
+            return true;
+        }
+
         // Cap oversized textures first (drops the top mip level), then transcode if the encoding needs it.
-        // Scoped to textures a modern M2/WMO/ADT source actually referenced (see Host.hpp MarkModernTexture):
-        // the cap exists for the 32-bit address-space pressure modern content adds, not for native archive
-        // textures, which the native game already ships at a size it was built to handle.
-        // Tileset side maps (_h height, _s specular) stay at 1024: the consumers read one scalar channel,
-        // and every extra 2048 chain multiplies the boot-time streaming volume and pool pressure.
-        const bool sideMap = EndsWithCI(name, "_h.blp") || EndsWithCI(name, "_s.blp");
-        const uint32_t maxEdge = (IsTilesetPath(name) && !sideMap) ? kMaxTilesetEdge : kMaxTextureEdge;
+        const uint32_t maxTextureEdge = IsEnvironmentTexture(name) ? EnvironmentTextureMaxEdge() : kMaxTextureEdge;
         std::vector<uint8_t> capped;
         std::span<const uint8_t> src = raw;
-        const bool didCap = wxl::host::IsModernTexture(name) &&
-            wxl::modern::assets::textures::blp::CapBlpMips(raw, capped, maxEdge);
+        // EnvironmentTextureMaxEdge is a client-memory policy, not a modern-format compatibility
+        // policy. Stock WotLK BLP2 world textures can also be 1024/2048 and were previously bypassing
+        // the cap solely because IsModernTexture returned false. Busy zones then retained the original
+        // top mips until Texture.cpp could no longer allocate even a small DXT surface. Cap every BLP2
+        // environment texture; CapBlpMips strictly declines BLP1 and malformed data.
+        const bool capEligible = wxl::host::IsModernTexture(name) || IsEnvironmentTexture(name);
+        const bool didCap = capEligible &&
+            wxl::modern::assets::textures::blp::CapBlpMips(raw, capped, maxTextureEdge);
         if (didCap) src = capped;
 
         std::vector<uint8_t> transcoded;
         if (wxl::modern::assets::textures::blp::TranscodeBlp(src, transcoded))
         {
             out = std::move(transcoded);
-            wxl::core::log::Printf("modern-blp: %.*s %sBGRA->DXT5 (%u -> %u bytes)",
-                int(name.size()), name.data(), didCap ? "capped+" : "",
-                uint32_t(raw.size()), uint32_t(out.size()));
+            if (VerboseAssetLogs())
+                wxl::core::log::Printf("modern-blp: %.*s %sBGRA->DXT5 (%u -> %u bytes)",
+                    int(name.size()), name.data(), didCap ? "capped+" : "",
+                    uint32_t(raw.size()), uint32_t(out.size()));
             return true;
         }
         if (didCap)
         {
             out = std::move(capped);
-            wxl::core::log::Printf("modern-blp: %.*s capped to %u (%u -> %u bytes)",
-                int(name.size()), name.data(), kMaxTextureEdge, uint32_t(raw.size()), uint32_t(out.size()));
+            if (VerboseAssetLogs())
+                wxl::core::log::Printf("modern-blp: %.*s capped to %u (%u -> %u bytes)",
+                    int(name.size()), name.data(), maxTextureEdge, uint32_t(raw.size()), uint32_t(out.size()));
             return true;
         }
         return false;

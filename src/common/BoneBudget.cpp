@@ -20,6 +20,7 @@
 #include "core/Logger.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <cstdlib>
 #include <cstring>
 #include <unordered_map>
@@ -33,6 +34,33 @@ namespace wxl::modern::assets::common::bones
     {
         constexpr uint32_t kSkinU16Max         = 0xFFFF;  // u16 ceiling of the skin arrays
         constexpr uint32_t kSplitMaxBoneCombos = 0x10000; // boneCombos upper bound, rejected before bulk copy
+
+        bool StartsWithCI(const char* value, const char* prefix)
+        {
+            if (!value || !prefix) return false;
+            while (*prefix)
+            {
+                const char aRaw = (*value == '/') ? '\\' : *value;
+                const char bRaw = (*prefix == '/') ? '\\' : *prefix;
+                if (std::tolower(static_cast<unsigned char>(aRaw)) !=
+                    std::tolower(static_cast<unsigned char>(bRaw))) return false;
+                ++value;
+                ++prefix;
+            }
+            return true;
+        }
+
+        bool UsesExtendedIndexStart(const char* name)
+        {
+            return StartsWithCI(name, "character\\") ||
+                   StartsWithCI(name, "item\\objectcomponents\\");
+        }
+
+        uint32_t SourceIndexStart(const fmt::M2SkinSection& section, bool extended)
+        {
+            return extended ? ((static_cast<uint32_t>(section.level) << 16) | section.indexStart)
+                            : static_cast<uint32_t>(section.indexStart);
+        }
     }
 
     /**
@@ -60,10 +88,12 @@ namespace wxl::modern::assets::common::bones
         }
 
         bool needsSplit = false;
+        const bool extendedIndexStart = UsesExtendedIndexStart(name);
         for (uint32_t si = 0; si < skin->submeshCount; ++si)
         {
             const fmt::M2SkinSection& s = skin->submeshes[si];
-            if (s.level == 0 && s.boneCount > kMaxBonesPerDraw) { needsSplit = true; break; }
+            if ((extendedIndexStart || s.level == 0) && s.boneCount > kMaxBonesPerDraw)
+                { needsSplit = true; break; }
         }
         if (!needsSplit) return false;
 
@@ -83,7 +113,7 @@ namespace wxl::modern::assets::common::bones
 
             // A level>0 submesh is a sub-batch the engine cannot draw. Pass it through as a single zeroed
             // placeholder so the batch re-point stays 1:1; its batch is later skipped.
-            if (s.level > 0)
+            if (s.level > 0 && !extendedIndexStart)
             {
                 s.level = 0; s.vertexStart = 0; s.vertexCount = 0; s.indexStart = 0;
                 s.indexCount = 0; s.boneComboIndex = 0; s.centerBoneIndex = 0; s.boneCount = 1;
@@ -92,7 +122,8 @@ namespace wxl::modern::assets::common::bones
                 continue;
             }
 
-            if (static_cast<uint32_t>(s.indexStart) + s.indexCount > skin->indexCount)
+            const uint32_t sourceIndexStart = SourceIndexStart(s, extendedIndexStart);
+            if (sourceIndexStart > skin->indexCount || s.indexCount > skin->indexCount - sourceIndexStart)
             {
                 WLOG_WARN("modern-assets: '%s' submesh %u index window past skin indexCount, skipping bone split", name, si);
                 return false;
@@ -117,14 +148,16 @@ namespace wxl::modern::assets::common::bones
 
                 uint32_t secVertStart  = static_cast<uint32_t>(newVtxLookup.size());
                 uint32_t secIndexStart = static_cast<uint32_t>(newIndices.size());
-                if (secVertStart > kSkinU16Max || secIndexStart > kSkinU16Max) return false;
+                if (secVertStart > kSkinU16Max) return false;
+                if (!extendedIndexStart && secIndexStart > kSkinU16Max) return false;
+                if (extendedIndexStart && (secIndexStart >> 16) > kSkinU16Max) return false;
 
                 std::unordered_map<uint16_t, uint16_t> vmap;
                 for (uint32_t t = triFrom; t < triTo; ++t)
                 {
                     for (uint32_t k = 0; k < 3; ++k)
                     {
-                        uint16_t lv = skin->indices[s.indexStart + t * 3 + k];
+                        uint16_t lv = skin->indices[sourceIndexStart + t * 3 + k];
                         if (lv >= skin->vertexCount) return false;
                         auto it = vmap.find(lv);
                         uint16_t nv;
@@ -158,7 +191,8 @@ namespace wxl::modern::assets::common::bones
                 fmt::M2SkinSection sec = s;
                 sec.vertexStart    = static_cast<uint16_t>(secVertStart);
                 sec.vertexCount    = static_cast<uint16_t>(secVertCount);
-                sec.indexStart     = static_cast<uint16_t>(secIndexStart);
+                sec.level          = extendedIndexStart ? static_cast<uint16_t>(secIndexStart >> 16) : 0;
+                sec.indexStart     = static_cast<uint16_t>(secIndexStart & kSkinU16Max);
                 sec.indexCount     = static_cast<uint16_t>(secIndexCount);
                 sec.boneCount      = static_cast<uint16_t>(globals.size());
                 sec.boneComboIndex = static_cast<uint16_t>(comboIndex);
@@ -172,7 +206,7 @@ namespace wxl::modern::assets::common::bones
                 uint16_t g[12]; int gn = 0;
                 for (uint32_t k = 0; k < 3; ++k)
                 {
-                    uint16_t lv = skin->indices[s.indexStart + t * 3 + k];
+                    uint16_t lv = skin->indices[sourceIndexStart + t * 3 + k];
                     if (lv >= skin->vertexCount) return false;
                     const uint8_t* infl = skin->bones + lv * 4;
                     for (uint32_t j = 0; j < 4; ++j)
