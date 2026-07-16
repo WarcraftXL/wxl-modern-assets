@@ -21,8 +21,9 @@ most work happens in place; only the synthesized texture-coordinate-combos array
 - `Particles` - compacts the source emitter record; scopes the alpha-key cutoff at draw time.
 - `Ribbons` - clamps source ribbon indices at load; opts the multi-texture ribbon combine at draw.
 - `Animations` - masks the split in/out blend time back to one value; remaps out-of-range sequence ids.
-- `Textures` - synthesizes the texture-coordinate-combos array a source model omits, so parse-time
-  finalize never indexes a null array.
+- `Textures` - synthesizes the texture-coordinate-combos array a source model omits, preserves
+  equipment texture-animation loops, and normalizes object-skin texture types before parse-time
+  finalize reads them.
 
 A model that ships as a chunked MD21 container (`Md21.hpp`) is de-chunked first: the MD20 block is
 extracted and the TXID-referenced texture names are inlined via a FileDataID resolver, then the
@@ -72,10 +73,12 @@ change, so the in-process path is a no-op whenever the host is doing the work.
 - `BlpTranscode::TranscodeBlp` re-encodes the uncompressed-BGRA BLP encoding (3) - which the client
   cannot decode at all (renders white) - to DXT5, keeping the full mip chain.
 - `BlpTranscode::CapBlpMips` caps an oversized texture's larger edge by dropping top mip level(s) and
-  re-basing the mip table (no decode/re-encode, works on any encoding). Tileset diffuse maps are capped
-  at 2048; every other texture (model/WMO art, and tileset height/specular side maps) caps at 1024 -
-  the client's 32-bit address space is the actual constraint, so only the content class that visibly
-  benefits pays the extra footprint.
+  re-basing the mip table (no decode/re-encode). Environment textures follow the client's
+  `environmentDetail` setting (256 on Low/custom-low, otherwise 512) while other modern textures cap
+  at 1024. The environment cap can be overridden with `SET environmentTextureMaxEdge`,
+  `SET worldTextureMaxEdge`, `WXL_ENV_TEXTURE_MAX_EDGE`, or `WXL_WORLD_TEXTURE_MAX_EDGE`.
+- Item texture components are converted to the paletted format expected by the 3.3.5 character
+  compositor and follow `componentTextureLevel` (256, 512, or 1024 depending on the selected quality).
 - `TextureScratch.cpp` patches the client's boot-time mip-decode scratch buffer (via the DllMain
   install seam, before any client boot code) wide enough to actually decode the 2048 tileset chain the
   host now serves - without it, the wider chain overflows a scratch sized for 1024.
