@@ -35,6 +35,15 @@ namespace wxl::modern::assets::m2::downport
 
     namespace
     {
+        // In the 3.3.5 runtime these bits are not passive model features: CM2Shared's destructor
+        // treats them as ownership markers and calls SMemFree on the pointer-fixed arrays at
+        // header + 0x84 (textureCombos) and header + 0x9C (textureTransformCombos).  A downported
+        // image keeps those arrays inside its single file buffer, so carrying the modern meanings
+        // of these bits into v264 makes the client free an interior pointer while collecting the
+        // model.  Preserve the compatible flags (notably 0x8 texture-combiner combos), but never
+        // advertise these two native ownership contracts for a self-contained transformed image.
+        constexpr uint32_t kClientRuntimeOwnedArrayFlags = 0x20u | 0x40u;
+
         bool StartsWithCI(std::string_view value, std::string_view prefix)
         {
             if (prefix.size() > value.size()) return false;
@@ -51,9 +60,10 @@ namespace wxl::modern::assets::m2::downport
 
         bool RepairsTextureLoops(std::string_view name)
         {
-            return StartsWithCI(name, "item\\") ||
-                   StartsWithCI(name, "creature\\") ||
-                   StartsWithCI(name, "character\\");
+            // The compatibility issue was observed on attached retail equipment effects. Keep the
+            // pre-parse rewrite scoped to that asset family: rewriting character or creature clocks
+            // can change animation semantics that are unrelated to equipment texture transforms.
+            return StartsWithCI(name, "item\\objectcomponents\\");
         }
     }
 
@@ -152,6 +162,8 @@ namespace wxl::modern::assets::m2::downport
                 WLOG_INFO("modern-m2: '%.*s' repaired %u pre-parse texture-transform loop(s)",
                           int(name.size()), name.data(), repaired);
         }
+
+        md->globalFlags &= ~kClientRuntimeOwnedArrayFlags;
 
         // Stage, do not finalize: the body now matches the client contract, but the version carries the
         // staging bit so the DLL recognizes a compacted image and finalizes it (the client accepts only the

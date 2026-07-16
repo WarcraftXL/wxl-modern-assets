@@ -229,7 +229,13 @@ namespace
         const uint32_t maxTextureEdge = IsEnvironmentTexture(name) ? EnvironmentTextureMaxEdge() : kMaxTextureEdge;
         std::vector<uint8_t> capped;
         std::span<const uint8_t> src = raw;
-        const bool didCap = wxl::host::IsModernTexture(name) &&
+        // EnvironmentTextureMaxEdge is a client-memory policy, not a modern-format compatibility
+        // policy. Stock WotLK BLP2 world textures can also be 1024/2048 and were previously bypassing
+        // the cap solely because IsModernTexture returned false. Busy zones then retained the original
+        // top mips until Texture.cpp could no longer allocate even a small DXT surface. Cap every BLP2
+        // environment texture; CapBlpMips strictly declines BLP1 and malformed data.
+        const bool capEligible = wxl::host::IsModernTexture(name) || IsEnvironmentTexture(name);
+        const bool didCap = capEligible &&
             wxl::modern::assets::textures::blp::CapBlpMips(raw, capped, maxTextureEdge);
         if (didCap) src = capped;
 

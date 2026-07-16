@@ -17,8 +17,6 @@
 #include "Textures.hpp"
 
 #include "Contract.hpp"
-#include "core/Logger.hpp"
-
 #include <algorithm>
 #include <cctype>
 #include <cstring>
@@ -120,11 +118,6 @@ namespace wxl::modern::assets::m2::textures
             return false;
         }
 
-        bool DebugTextureLoops(std::string_view name)
-        {
-            return ContainsCI(name, "raidwarriorprogenitor");
-        }
-
         bool HasUsableGlobalLoop(uint16_t globalSeq, const std::vector<uint32_t>& loops)
         {
             return globalSeq != kNoGlobalSequence &&
@@ -155,8 +148,9 @@ namespace wxl::modern::assets::m2::textures
                     return true;
                 }
                 if (loops.size() >= 0xFFFEu) return false;
-                // Slot 0-only models need a harmless slot-1 pad so the private clock lands at index 2.
-                if (loops.size() < 2)
+                // Models with fewer than two loops need harmless pads so the private clock always
+                // lands at index 2 or above, including a source with no global-loop table at all.
+                while (loops.size() < 2)
                     loops.push_back(duration);
                 if (loops.size() >= 0xFFFEu) return false;
                 loops.push_back(duration);
@@ -231,10 +225,6 @@ namespace wxl::modern::assets::m2::textures
         std::vector<uint32_t> loops;
         const bool isolateEquipmentLoop = ContainsCI(name, "item\\objectcomponents\\");
         const uint32_t repaired = BuildRepairedLoops(md, fileSize, loops, isolateEquipmentLoop);
-        if (DebugTextureLoops(name))
-            WLOG_INFO("modern-m2 texture-loop probe: '%.*s' pre extra repaired=%u loops old=%u new=%zu texXf=%u",
-                      int(name.size()), name.data(), repaired, md->globalLoops.count, loops.size(),
-                      md->textureTransforms.count);
         if (!repaired || loops.size() == md->globalLoops.count) return 0;
 
         const uint32_t aligned = Align4(appendOffset);
@@ -274,18 +264,8 @@ namespace wxl::modern::assets::m2::textures
                 for (uint32_t t = 0; t < 3; ++t)
                 {
                     uint8_t* track = xf + t * kTrackStride;
-                    const uint16_t oldGlobalSeq = Rd16(track + kTrackGlobalSeq);
-                    const uint32_t duration = TrackDurationMs(md, fileSize, track);
                     uint16_t loop = kNoGlobalSequence;
                     if (!DesiredTrackLoop(md, fileSize, track, loops, loop, isolateEquipmentLoop)) continue;
-                    if (DebugTextureLoops(name))
-                    {
-                        const uint32_t oldLoopMs = oldGlobalSeq < loops.size() ? loops[oldGlobalSeq] : 0;
-                        const uint32_t newLoopMs = loop < loops.size() ? loops[loop] : 0;
-                        WLOG_INFO("modern-m2 texture-loop probe: '%.*s' xf=%u track=%u oldGs=%u oldMs=%u trackMs=%u newGs=%u newMs=%u",
-                                  int(name.size()), name.data(), i, t, oldGlobalSeq, oldLoopMs,
-                                  duration, loop, newLoopMs);
-                    }
                     Wr16(track + kTrackGlobalSeq, loop);
                     ++written;
                 }
@@ -305,7 +285,10 @@ namespace wxl::modern::assets::m2::textures
         {
             if (textures[i].type != fmt::kTexTypeWeaponBlade) continue;
 
-            const bool hasFilename = textures[i].filename.count != 0 && textures[i].filename.offset != 0;
+            const auto& filename = textures[i].filename;
+            const bool hasFilename = filename.count != 0;
+            if (hasFilename && (!filename.offset || !Fits(filename.offset, filename.count, 1, fileSize)))
+                continue;
             textures[i].type = hasFilename ? fmt::kTexTypeHardcoded : fmt::kTexTypeObjectSkin;
             if (hasFilename)
                 ++result.toHardcoded;

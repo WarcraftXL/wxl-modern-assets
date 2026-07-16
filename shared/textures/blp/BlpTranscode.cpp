@@ -102,6 +102,7 @@ namespace wxl::modern::assets::textures::blp
             if (n < 0x94 || rd32(b) != kMagicBlp2 || rd32(b + 4) != 1) return false;
             if (b[kEncoding] != 2) return false;
 
+            const uint8_t alphaDepth = b[kAlphaDepth];
             const uint8_t alphaType = b[kAlphaType];
             if (alphaType != 0 && alphaType != 1 && alphaType != 7) return false;
 
@@ -175,7 +176,10 @@ namespace wxl::modern::assets::textures::blp
                     }
 
                     uint8_t colors[4][4];
-                    DecodeDxtColors(colorBlock, alphaType == 0, colors);
+                    // BLP uses alphaDepth to distinguish opaque BC1/DXT1 from its 1-bit-alpha mode.
+                    // Endpoint ordering alone is insufficient: opaque blocks are allowed to have c0 <= c1,
+                    // where index 3 must remain an opaque interpolated color instead of becoming transparent.
+                    DecodeDxtColors(colorBlock, alphaType == 0 && alphaDepth != 0, colors);
                     const uint32_t cidx = rd32(colorBlock + 4);
                     for (uint32_t py = 0; py < 4; ++py)
                     {
