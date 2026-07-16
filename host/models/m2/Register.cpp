@@ -19,11 +19,11 @@
 
 #include "EquipmentFixes.hpp"
 
+#include "../../../shared/common/Text.hpp"
 #include "../../../shared/models/m2/Downport.hpp"
 #include "../../../shared/models/m2/Md21.hpp"
 #include "../../../shared/models/m2/Skel.hpp"
 
-#include <cctype>
 #include <cstdint>
 #include <cstring>
 #include <span>
@@ -44,6 +44,7 @@ namespace
     namespace equip = wxl::modern::assets::m2::equipment;
     namespace m21  = wxl::modern::assets::m2::md21;
     namespace skel = wxl::modern::assets::m2::skel;
+    namespace text = wxl::modern::assets::common::text;
 
     // Module-owned archive mount for the .skel sibling read; see AdtHost.cpp for why this is thread_local
     // (one StormLib handle per host worker thread) rather than a shared instance under a lock.
@@ -59,16 +60,6 @@ namespace
         const std::string root = wxl::host::ClientRoot();
         g_mounted = !root.empty() && g_store.Mount(root);
         return g_mounted;
-    }
-
-    bool EndsWithCI(std::string_view s, std::string_view suffix)
-    {
-        if (suffix.size() > s.size()) return false;
-        const size_t off = s.size() - suffix.size();
-        for (size_t i = 0; i < suffix.size(); ++i)
-            if (std::tolower(static_cast<unsigned char>(s[off + i])) !=
-                std::tolower(static_cast<unsigned char>(suffix[i]))) return false;
-        return true;
     }
 
     /**
@@ -107,7 +98,7 @@ namespace
             // A split-skeleton source (bones/sequences/attachments moved out of the MD20 body) ships a
             // sibling .skel file next to the .m2; splice it back in before the downport runs so bones and
             // sequences reach it and the client's bone-budget split at skin finalize.
-            if (EndsWithCI(name, ".m2") && EnsureMounted())
+            if (text::EndsWithCI(name, ".m2") && EnsureMounted())
             {
                 std::string skelName(name.substr(0, name.size() - 3));
                 skelName += ".skel";

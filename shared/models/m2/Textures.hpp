@@ -86,4 +86,14 @@ namespace wxl::modern::assets::m2::textures
      * @return Counts of texture records rewritten.
      */
     WeaponBladeFixResult FixWeaponBladeTextureTypes(wxl::structure::m2::M2Header* md, uint32_t fileSize);
+
+    /**
+     * @brief Reports whether `name` is a path family FixWeaponBladeTextureTypes should run on.
+     *
+     * Scoped to creature/character models and non-weapon item components: a weapon's own WEAPON_BLADE slot
+     * is a legitimate replaceable-texture marker, not the misclassification this remap corrects.
+     * @param name  Model path.
+     * @return True if the remap applies to this path.
+     */
+    bool AllowsWeaponBladeRemap(std::string_view name);
 }

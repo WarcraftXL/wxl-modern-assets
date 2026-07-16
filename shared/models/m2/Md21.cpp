@@ -20,27 +20,18 @@
 #include "core/Logger.hpp"
 #include "structure/m2/M2Format.hpp"
 
-#include <cctype>
-#include <cstdlib>
+#include "../../common/Env.hpp"
+
+#include <cstddef>
 #include <string>
 
 namespace wxl::modern::assets::m2::md21
 {
     namespace fmt = wxl::structure::m2;
+    namespace env = wxl::modern::assets::common::env;
 
     namespace
     {
-        bool VerboseAssetLogs()
-        {
-            static const bool enabled = [] {
-                const char* raw = std::getenv("WXL_VERBOSE_ASSET_LOGS");
-                if (!raw || !*raw) raw = std::getenv("WXL_ASSET_LOGS");
-                if (!raw || !*raw) return false;
-                const char c = static_cast<char>(std::tolower(static_cast<unsigned char>(*raw)));
-                return c != '0' && c != 'n' && c != 'f';
-            }();
-            return enabled;
-        }
         // Auxiliary chunk magics are stored in memory order (not reversed), so a plain little-endian read
         // matches these.
         constexpr uint32_t Magic(char a, char b, char c, char d)
@@ -50,17 +41,17 @@ namespace wxl::modern::assets::m2::md21
         }
         constexpr uint32_t kTXID = Magic('T', 'X', 'I', 'D');
 
-        // M2 header field offsets the de-chunk touches.
-        constexpr uint32_t kHdrTextures   = 0x50; // M2Array: texture records
-        constexpr uint32_t kHdrBoneCombos = 0x78; // M2Array: bone lookup table
-        constexpr uint32_t kHdrBones      = 0x2C; // M2Array: bone records
-        // M2Texture record (0x10): type@0x00, flags@0x04, filename {count@0x08, offset@0x0C}.
-        constexpr uint32_t kTexStride     = 0x10;
-        constexpr uint32_t kTexNameCount  = 0x08;
-        constexpr uint32_t kTexNameOffset = 0x0C;
-        // M2CompBone record (0x58): keyBoneId@0x00, flags@0x04, parentBone@0x08, ...
-        constexpr uint32_t kBoneStride        = 0x58;
-        constexpr uint32_t kBoneFlags         = 0x04;
+        // M2 header field offsets the de-chunk touches (buffer is raw bytes here, not yet a validated,
+        // alignment-safe fmt::M2Header*, so these stay byte-offset reads/writes; the offsets themselves
+        // are pinned to the real struct layout instead of being re-typed magic numbers).
+        constexpr uint32_t kHdrTextures   = offsetof(fmt::M2Header, textures);   // M2Array: texture records
+        constexpr uint32_t kHdrBoneCombos = offsetof(fmt::M2Header, boneCombos); // M2Array: bone lookup table
+        constexpr uint32_t kHdrBones      = offsetof(fmt::M2Header, bones);      // M2Array: bone records
+        constexpr uint32_t kTexStride     = sizeof(fmt::M2Texture);
+        constexpr uint32_t kTexNameCount  = offsetof(fmt::M2Texture, filename); // filename.count
+        constexpr uint32_t kTexNameOffset = kTexNameCount + 4;                  // filename.offset
+        constexpr uint32_t kBoneStride        = sizeof(fmt::M2CompBone);
+        constexpr uint32_t kBoneFlags         = offsetof(fmt::M2CompBone, flags);
         constexpr uint32_t kBoneBillboardMask = 0x78; // spherical (0x8) + cylindrical-lock (0x10/0x20/0x40)
 
         // The shadow-swing case this workaround targets is a static prop rig (a lamp/torch's body on a
@@ -165,7 +156,7 @@ namespace wxl::modern::assets::m2::md21
             ++inlined;
         }
 
-        if (VerboseAssetLogs())
+        if (env::VerboseAssetLogs())
             wxl::core::log::Printf("modern-m2 md21: md20=%u textures=%u hardcoded=%u inlined=%u txid=%zu",
                 md20Size, texCount, hardcoded, inlined, txid.size());
         return true;

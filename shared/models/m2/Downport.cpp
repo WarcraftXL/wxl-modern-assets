@@ -26,16 +26,18 @@
 #include "Ribbons.hpp"
 #include "Textures.hpp"
 
-#include <cctype>
+#include "../../common/Text.hpp"
+
 #include <string_view>
 
 namespace wxl::modern::assets::m2::downport
 {
     namespace fmt = wxl::structure::m2;
+    namespace text = wxl::modern::assets::common::text;
 
     namespace
     {
-        // In the 3.3.5 runtime these bits are not passive model features: CM2Shared's destructor
+        // In the client runtime these bits are not passive model features: CM2Shared's destructor
         // treats them as ownership markers and calls SMemFree on the pointer-fixed arrays at
         // header + 0x84 (textureCombos) and header + 0x9C (textureTransformCombos).  A downported
         // image keeps those arrays inside its single file buffer, so carrying the modern meanings
@@ -44,26 +46,12 @@ namespace wxl::modern::assets::m2::downport
         // advertise these two native ownership contracts for a self-contained transformed image.
         constexpr uint32_t kClientRuntimeOwnedArrayFlags = 0x20u | 0x40u;
 
-        bool StartsWithCI(std::string_view value, std::string_view prefix)
-        {
-            if (prefix.size() > value.size()) return false;
-            for (size_t i = 0; i < prefix.size(); ++i)
-            {
-                const char aRaw = value[i] == '/' ? '\\' : value[i];
-                const char bRaw = prefix[i] == '/' ? '\\' : prefix[i];
-                const auto a = static_cast<unsigned char>(aRaw);
-                const auto b = static_cast<unsigned char>(bRaw);
-                if (std::tolower(a) != std::tolower(b)) return false;
-            }
-            return true;
-        }
-
         bool RepairsTextureLoops(std::string_view name)
         {
             // The compatibility issue was observed on attached retail equipment effects. Keep the
             // pre-parse rewrite scoped to that asset family: rewriting character or creature clocks
             // can change animation semantics that are unrelated to equipment texture transforms.
-            return StartsWithCI(name, "item\\objectcomponents\\");
+            return text::StartsWithCI(name, "item\\objectcomponents\\");
         }
     }
 

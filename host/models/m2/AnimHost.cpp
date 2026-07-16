@@ -18,7 +18,8 @@
 #include "core/Logger.hpp"
 #include "structure/m2/M2Format.hpp"
 
-#include <cctype>
+#include "../../../shared/common/Text.hpp"
+
 #include <cstdint>
 #include <cstring>
 #include <span>
@@ -36,22 +37,13 @@
 namespace
 {
     namespace fmt = wxl::structure::m2;
-
-    bool EndsWithCI(std::string_view s, std::string_view suffix)
-    {
-        if (suffix.size() > s.size()) return false;
-        const size_t off = s.size() - suffix.size();
-        for (size_t i = 0; i < suffix.size(); ++i)
-            if (std::tolower(static_cast<unsigned char>(s[off + i])) !=
-                std::tolower(static_cast<unsigned char>(suffix[i]))) return false;
-        return true;
-    }
+    namespace text = wxl::modern::assets::common::text;
 
     uint32_t Rd32(const uint8_t* p) { uint32_t v; std::memcpy(&v, p, 4); return v; }
 
     bool TransformAnim(std::string_view name, std::span<const uint8_t> raw, std::vector<uint8_t>& out)
     {
-        if (!EndsWithCI(name, ".anim")) return false;
+        if (!text::EndsWithCI(name, ".anim")) return false;
         if (raw.size() < 8 || Rd32(raw.data()) != fmt::kMagicAFM2) return false; // already Client-shaped
 
         const uint32_t payload = Rd32(raw.data() + 4);

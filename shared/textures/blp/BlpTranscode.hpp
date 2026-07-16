@@ -29,7 +29,7 @@ namespace wxl::modern::assets::textures::blp
     // Transcode an encoding-3 BLP to DXT5. Returns false (serve raw) for any other encoding or a non-BLP.
     bool TranscodeBlp(std::span<const uint8_t> in, std::vector<uint8_t>& out);
 
-    // Character component textures are CPU-composited by the 3.3.5 client. Native components are palettized
+    // Character component textures are CPU-composited by the client. Native components are palettized
     // BLP2 (encoding 1), while modern retail components are commonly DXT. Converts DXT components to that
     // legacy shape, using the mip whose long edge fits the native-style component budget.
     bool TextureComponentToPaletted(std::span<const uint8_t> in, std::vector<uint8_t>& out,

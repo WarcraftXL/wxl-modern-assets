@@ -30,7 +30,6 @@
 
 #include <windows.h>
 
-#include <cctype>
 #include <cstring>
 #include <string_view>
 
@@ -56,35 +55,14 @@ namespace wxl::modern::assets::m2
             return enabled;
         }
 
-        bool StartsWithCI(const char* value, const char* prefix)
-        {
-            if (!value || !prefix) return false;
-            while (*prefix)
-            {
-                const char aRaw = (*value == '/') ? '\\' : *value;
-                const char bRaw = (*prefix == '/') ? '\\' : *prefix;
-                if (std::tolower(static_cast<unsigned char>(aRaw)) !=
-                    std::tolower(static_cast<unsigned char>(bRaw))) return false;
-                ++value;
-                ++prefix;
-            }
-            return true;
-        }
-
-        bool AllowsObjectSkinRemapPath(const char* path)
-        {
-            if (StartsWithCI(path, "creature\\") || StartsWithCI(path, "character\\")) return true;
-            if (!StartsWithCI(path, "item\\objectcomponents\\")) return false;
-            return !StartsWithCI(path, "item\\objectcomponents\\weapon\\");
-        }
-
         void RemapWeaponBladeTextures(void* model, fmt::M2Header* header, uint32_t size)
         {
-            if (!model || !header || !AllowsObjectSkinRemapPath(m2::PathStem(model))) return;
+            const char* path = model ? m2::PathStem(model) : nullptr;
+            if (!header || !path || !tex::AllowsWeaponBladeRemap(path)) return;
             const auto patched = tex::FixWeaponBladeTextureTypes(header, size);
             if (patched.Total())
                 WLOG_INFO("modern-assets: %s fixed WEAPON_BLADE textures objectSkin=%u hardcoded=%u",
-                          m2::PathStem(model), patched.toObjectSkin, patched.toHardcoded);
+                          path, patched.toObjectSkin, patched.toHardcoded);
         }
     }
 

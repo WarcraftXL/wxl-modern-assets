@@ -18,6 +18,8 @@
 
 #include "core/Logger.hpp"
 
+#include "../../../shared/common/Env.hpp"
+#include "../../../shared/common/Text.hpp"
 #include "../../../shared/textures/blp/BlpTranscode.hpp"
 
 #include <cctype>
@@ -33,99 +35,60 @@
 // re-encoded to DXT5; every other texture is served raw (the transcode declines fast after the header).
 namespace
 {
-    bool EndsWithCI(std::string_view s, std::string_view suffix)
-    {
-        if (suffix.size() > s.size()) return false;
-        const size_t off = s.size() - suffix.size();
-        for (size_t i = 0; i < suffix.size(); ++i)
-            if (std::tolower(static_cast<unsigned char>(s[off + i])) !=
-                std::tolower(static_cast<unsigned char>(suffix[i]))) return false;
-        return true;
-    }
-
-    bool StartsWithCI(std::string_view s, std::string_view prefix)
-    {
-        if (prefix.size() > s.size()) return false;
-        for (size_t i = 0; i < prefix.size(); ++i)
-            if (std::tolower(static_cast<unsigned char>(s[i])) !=
-                std::tolower(static_cast<unsigned char>(prefix[i]))) return false;
-        return true;
-    }
+    namespace text = wxl::modern::assets::common::text;
+    namespace env  = wxl::modern::assets::common::env;
 
     bool IsTextureComponent(std::string_view name)
     {
-        return StartsWithCI(name, "item\\texturecomponents\\")
-            || StartsWithCI(name, "item/texturecomponents/");
+        return text::StartsWithCI(name, "item\\texturecomponents\\");
     }
 
     bool IsWorldTexture(std::string_view name)
     {
-        return StartsWithCI(name, "world\\")
-            || StartsWithCI(name, "world/");
+        return text::StartsWithCI(name, "world\\");
     }
 
     bool IsEnvironmentTexture(std::string_view name)
     {
         return IsWorldTexture(name)
-            || StartsWithCI(name, "dungeon\\")
-            || StartsWithCI(name, "dungeon/")
-            || StartsWithCI(name, "dungeons\\")
-            || StartsWithCI(name, "dungeons/")
-            || StartsWithCI(name, "environment\\")
-            || StartsWithCI(name, "environment/")
-            || StartsWithCI(name, "tileset\\")
-            || StartsWithCI(name, "tileset/");
+            || text::StartsWithCI(name, "dungeon\\")
+            || text::StartsWithCI(name, "dungeons\\")
+            || text::StartsWithCI(name, "environment\\")
+            || text::StartsWithCI(name, "tileset\\");
     }
 
-    bool EnvTruthy(const char* raw)
-    {
-        if (!raw || !*raw) return false;
-        const char c = static_cast<char>(std::tolower(static_cast<unsigned char>(*raw)));
-        return c != '0' && c != 'n' && c != 'f';
-    }
-
-    bool VerboseAssetLogs()
-    {
-        static const bool enabled = []() {
-            const char* raw = std::getenv("WXL_VERBOSE_ASSET_LOGS");
-            if (!raw || !*raw) raw = std::getenv("WXL_ASSET_LOGS");
-            return EnvTruthy(raw);
-        }();
-        return enabled;
-    }
-
-    int FindConfigInt(const std::string& text, const char* key, int fallback)
+    int FindConfigInt(const std::string& cfg, const char* key, int fallback)
     {
         const std::string needle = std::string("SET ") + key;
-        size_t pos = text.find(needle);
+        size_t pos = cfg.find(needle);
         if (pos == std::string::npos) return fallback;
         pos += needle.size();
-        while (pos < text.size() && std::isspace(static_cast<unsigned char>(text[pos]))) ++pos;
-        if (pos < text.size() && text[pos] == '"') ++pos;
+        while (pos < cfg.size() && std::isspace(static_cast<unsigned char>(cfg[pos]))) ++pos;
+        if (pos < cfg.size() && cfg[pos] == '"') ++pos;
         bool neg = false;
-        if (pos < text.size() && text[pos] == '-') { neg = true; ++pos; }
+        if (pos < cfg.size() && cfg[pos] == '-') { neg = true; ++pos; }
         int value = 0;
         bool any = false;
-        while (pos < text.size() && std::isdigit(static_cast<unsigned char>(text[pos])))
+        while (pos < cfg.size() && std::isdigit(static_cast<unsigned char>(cfg[pos])))
         {
             any = true;
-            value = value * 10 + int(text[pos] - '0');
+            value = value * 10 + int(cfg[pos] - '0');
             ++pos;
         }
         if (!any) return fallback;
         return neg ? -value : value;
     }
 
-    double FindConfigNumber(const std::string& text, const char* key, double fallback)
+    double FindConfigNumber(const std::string& cfg, const char* key, double fallback)
     {
         const std::string needle = std::string("SET ") + key;
-        size_t pos = text.find(needle);
+        size_t pos = cfg.find(needle);
         if (pos == std::string::npos) return fallback;
         pos += needle.size();
-        while (pos < text.size() && std::isspace(static_cast<unsigned char>(text[pos]))) ++pos;
-        if (pos < text.size() && text[pos] == '"') ++pos;
+        while (pos < cfg.size() && std::isspace(static_cast<unsigned char>(cfg[pos]))) ++pos;
+        if (pos < cfg.size() && cfg[pos] == '"') ++pos;
         char* end = nullptr;
-        const char* begin = text.c_str() + pos;
+        const char* begin = cfg.c_str() + pos;
         const double value = std::strtod(begin, &end);
         return end == begin ? fallback : value;
     }
@@ -134,16 +97,16 @@ namespace
     {
         FILE* f = std::fopen(path.c_str(), "rb");
         if (!f) return {};
-        std::string text;
+        std::string content;
         char buf[4096];
         for (;;)
         {
             const size_t n = std::fread(buf, 1, sizeof(buf), f);
-            if (n) text.append(buf, n);
+            if (n) content.append(buf, n);
             if (n < sizeof(buf)) break;
         }
         std::fclose(f);
-        return text;
+        return content;
     }
 
     const std::string& ClientConfigText()
@@ -214,12 +177,12 @@ namespace
 
     bool TransformBlp(std::string_view name, std::span<const uint8_t> raw, std::vector<uint8_t>& out)
     {
-        if (!EndsWithCI(name, ".blp")) return false;
+        if (!text::EndsWithCI(name, ".blp")) return false;
 
         const uint32_t componentMaxEdge = ComponentTextureMaxEdge();
         if (IsTextureComponent(name) && wxl::modern::assets::textures::blp::TextureComponentToPaletted(raw, out, componentMaxEdge))
         {
-            if (VerboseAssetLogs())
+            if (env::VerboseAssetLogs())
                 wxl::core::log::Printf("modern-blp: %.*s DXT component->paletted maxEdge=%u (%u -> %u bytes)",
                     int(name.size()), name.data(), componentMaxEdge, uint32_t(raw.size()), uint32_t(out.size()));
             return true;
@@ -230,8 +193,8 @@ namespace
         std::vector<uint8_t> capped;
         std::span<const uint8_t> src = raw;
         // EnvironmentTextureMaxEdge is a client-memory policy, not a modern-format compatibility
-        // policy. Stock WotLK BLP2 world textures can also be 1024/2048 and were previously bypassing
-        // the cap solely because IsModernTexture returned false. Busy zones then retained the original
+        // policy. Stock BLP2 world textures can also be 1024/2048 and were previously bypassing the
+        // cap solely because IsModernTexture returned false. Busy zones then retained the original
         // top mips until Texture.cpp could no longer allocate even a small DXT surface. Cap every BLP2
         // environment texture; CapBlpMips strictly declines BLP1 and malformed data.
         const bool capEligible = wxl::host::IsModernTexture(name) || IsEnvironmentTexture(name);
@@ -243,7 +206,7 @@ namespace
         if (wxl::modern::assets::textures::blp::TranscodeBlp(src, transcoded))
         {
             out = std::move(transcoded);
-            if (VerboseAssetLogs())
+            if (env::VerboseAssetLogs())
                 wxl::core::log::Printf("modern-blp: %.*s %sBGRA->DXT5 (%u -> %u bytes)",
                     int(name.size()), name.data(), didCap ? "capped+" : "",
                     uint32_t(raw.size()), uint32_t(out.size()));
@@ -252,7 +215,7 @@ namespace
         if (didCap)
         {
             out = std::move(capped);
-            if (VerboseAssetLogs())
+            if (env::VerboseAssetLogs())
                 wxl::core::log::Printf("modern-blp: %.*s capped to %u (%u -> %u bytes)",
                     int(name.size()), name.data(), maxTextureEdge, uint32_t(raw.size()), uint32_t(out.size()));
             return true;

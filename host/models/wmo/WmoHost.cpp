@@ -18,10 +18,10 @@
 #include "core/Logger.hpp"
 
 #include "../../../shared/common/Chunk.hpp"
+#include "../../../shared/common/Text.hpp"
 #include "../../../shared/models/wmo/WmoChunks.hpp"
 #include "../../../shared/models/wmo/WmoTranslate.hpp"
 
-#include <cctype>
 #include <span>
 #include <string>
 #include <vector>
@@ -34,22 +34,7 @@ namespace
 {
     namespace mwmo = wxl::modern::assets::wmo;
     namespace iff  = wxl::modern::assets::common::iff;
-
-    /**
-     * @brief Reports whether `s` ends with `suffix`, case-insensitively.
-     * @param s       string to test
-     * @param suffix  suffix to match
-     * @return true if `s` ends with `suffix`
-     */
-    bool EndsWithCI(std::string_view s, std::string_view suffix)
-    {
-        if (suffix.size() > s.size()) return false;
-        const size_t off = s.size() - suffix.size();
-        for (size_t i = 0; i < suffix.size(); ++i)
-            if (std::tolower(static_cast<unsigned char>(s[off + i])) !=
-                std::tolower(static_cast<unsigned char>(suffix[i]))) return false;
-        return true;
-    }
+    namespace text = wxl::modern::assets::common::text;
 
     // Magic of the chunk that follows MVER: MOHD for a root, MOGP for a group, 0 if unreadable.
     uint32_t SecondChunkMagic(std::span<const uint8_t> raw)
@@ -68,13 +53,13 @@ namespace
     bool ResolveThunk(void* /*user*/, uint32_t fileDataId, std::string& outPath)
     {
         if (!wxl::host::ResolveFdid(fileDataId, outPath)) return false;
-        if (EndsWithCI(outPath, ".blp")) wxl::host::MarkModernTexture(outPath);
+        if (text::EndsWithCI(outPath, ".blp")) wxl::host::MarkModernTexture(outPath);
         return true;
     }
 
     bool TransformWmo(std::string_view name, std::span<const uint8_t> raw, std::vector<uint8_t>& out)
     {
-        if (!EndsWithCI(name, ".wmo")) return false;
+        if (!text::EndsWithCI(name, ".wmo")) return false;
 
         const uint32_t second = SecondChunkMagic(raw);
         if (second == mwmo::kMOHD)

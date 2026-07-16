@@ -18,6 +18,7 @@
 #pragma once
 
 #include <cstdint>
+#include <string_view>
 #include <vector>
 
 #include "game/m2/M2.hpp"
@@ -52,6 +53,27 @@ namespace wxl::modern::assets::common::bones
     struct SplitSection { wxl::structure::m2::M2SkinSection section; uint16_t origSubmesh; };
     /** @brief The contiguous run of new sub-section indices one original submesh became. */
     struct SplitRun { uint16_t first; uint16_t count; };
+
+    /**
+     * @brief Reports whether `name`'s skin sections pack indexStart as (level << 16) | indexStart
+     *        instead of using level as a legacy LOD marker.
+     *
+     * Character and item-component skins can carry more than 65535 indices, so their M2SkinSection.level
+     * is repurposed as the high 16 bits of a 32-bit index start; every other source keeps level as the
+     * legacy LOD/sub-batch marker. This single classification is shared by SplitSubmeshes (which submeshes
+     * to split) and Skin::Rebuild (which submeshes to park vs. keep), so the two never drift apart.
+     * @param name  Model path.
+     * @return True if `name` uses the extended (level, indexStart) encoding.
+     */
+    bool UsesExtendedIndexStart(std::string_view name);
+
+    /**
+     * @brief Reads a submesh's full (possibly extended) index start.
+     * @param section   Skin section to read.
+     * @param extended  Result of UsesExtendedIndexStart for the owning model.
+     * @return indexStart, or (level << 16) | indexStart when extended.
+     */
+    uint32_t FullIndexStart(const wxl::structure::m2::M2SkinSection& section, bool extended);
 
     /**
      * @brief Partitions over-ceiling submeshes, rebuilding the live skin geometry and header.boneCombos.

@@ -19,48 +19,34 @@
 
 #include "core/Logger.hpp"
 
+#include "../../shared/common/Text.hpp"
+
 #include <algorithm>
-#include <cctype>
-#include <cstdlib>
 #include <cstring>
 #include <unordered_map>
 
 namespace wxl::modern::assets::common::bones
 {
     namespace fmt  = wxl::structure::m2;
+    namespace text = wxl::modern::assets::common::text;
     using Skin     = wxl::game::m2::M2SkinProfile;
 
     namespace
     {
         constexpr uint32_t kSkinU16Max         = 0xFFFF;  // u16 ceiling of the skin arrays
         constexpr uint32_t kSplitMaxBoneCombos = 0x10000; // boneCombos upper bound, rejected before bulk copy
+    }
 
-        bool StartsWithCI(const char* value, const char* prefix)
-        {
-            if (!value || !prefix) return false;
-            while (*prefix)
-            {
-                const char aRaw = (*value == '/') ? '\\' : *value;
-                const char bRaw = (*prefix == '/') ? '\\' : *prefix;
-                if (std::tolower(static_cast<unsigned char>(aRaw)) !=
-                    std::tolower(static_cast<unsigned char>(bRaw))) return false;
-                ++value;
-                ++prefix;
-            }
-            return true;
-        }
+    bool UsesExtendedIndexStart(std::string_view name)
+    {
+        return text::StartsWithCI(name, "character\\") ||
+               text::StartsWithCI(name, "item\\objectcomponents\\");
+    }
 
-        bool UsesExtendedIndexStart(const char* name)
-        {
-            return StartsWithCI(name, "character\\") ||
-                   StartsWithCI(name, "item\\objectcomponents\\");
-        }
-
-        uint32_t SourceIndexStart(const fmt::M2SkinSection& section, bool extended)
-        {
-            return extended ? ((static_cast<uint32_t>(section.level) << 16) | section.indexStart)
-                            : static_cast<uint32_t>(section.indexStart);
-        }
+    uint32_t FullIndexStart(const fmt::M2SkinSection& section, bool extended)
+    {
+        return extended ? ((static_cast<uint32_t>(section.level) << 16) | section.indexStart)
+                        : static_cast<uint32_t>(section.indexStart);
     }
 
     /**
@@ -122,7 +108,7 @@ namespace wxl::modern::assets::common::bones
                 continue;
             }
 
-            const uint32_t sourceIndexStart = SourceIndexStart(s, extendedIndexStart);
+            const uint32_t sourceIndexStart = FullIndexStart(s, extendedIndexStart);
             if (sourceIndexStart > skin->indexCount || s.indexCount > skin->indexCount - sourceIndexStart)
             {
                 WLOG_WARN("modern-assets: '%s' submesh %u index window past skin indexCount, skipping bone split", name, si);

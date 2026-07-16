@@ -17,15 +17,17 @@
 #include "Textures.hpp"
 
 #include "Contract.hpp"
+
+#include "../../common/Text.hpp"
+
 #include <algorithm>
-#include <cctype>
 #include <cstring>
-#include <string_view>
 #include <vector>
 
 namespace wxl::modern::assets::m2::textures
 {
-    namespace fmt = wxl::structure::m2;
+    namespace fmt  = wxl::structure::m2;
+    namespace text = wxl::modern::assets::common::text;
 
     namespace
     {
@@ -99,25 +101,6 @@ namespace wxl::modern::assets::m2::textures
             return duration >= kMinLoopMs && duration <= kMaxLoopMs;
         }
 
-        bool ContainsCI(std::string_view value, std::string_view needle)
-        {
-            if (needle.empty() || needle.size() > value.size()) return false;
-            for (size_t i = 0; i + needle.size() <= value.size(); ++i)
-            {
-                bool match = true;
-                for (size_t j = 0; j < needle.size(); ++j)
-                {
-                    char a = value[i + j] == '/' ? '\\' : value[i + j];
-                    char b = needle[j] == '/' ? '\\' : needle[j];
-                    a = static_cast<char>(std::tolower(static_cast<unsigned char>(a)));
-                    b = static_cast<char>(std::tolower(static_cast<unsigned char>(b)));
-                    if (a != b) { match = false; break; }
-                }
-                if (match) return true;
-            }
-            return false;
-        }
-
         bool HasUsableGlobalLoop(uint16_t globalSeq, const std::vector<uint32_t>& loops)
         {
             return globalSeq != kNoGlobalSequence &&
@@ -134,7 +117,7 @@ namespace wxl::modern::assets::m2::textures
 
             const uint16_t globalSeq = Rd16(track + kTrackGlobalSeq);
             // Retail equipment commonly assigns continuously scrolling UV effects to either of the first
-            // two global slots. On attached models the 3.3.5 controller can leave those slots at their
+            // two global slots. On attached models the client's controller can leave those slots at their
             // initial/final key: slot 0 effects then appear static from load, while the observed 10-second
             // slot 1 effect advances once and freezes. A private duplicate above slot 1 gets the normal
             // modulo clock. Repoint only the texture track, leaving bone/particle users untouched.
@@ -223,7 +206,7 @@ namespace wxl::modern::assets::m2::textures
         if (!md || md->magic != fmt::kMagicMD20) return 0;
 
         std::vector<uint32_t> loops;
-        const bool isolateEquipmentLoop = ContainsCI(name, "item\\objectcomponents\\");
+        const bool isolateEquipmentLoop = text::ContainsCI(name, "item\\objectcomponents\\");
         const uint32_t repaired = BuildRepairedLoops(md, fileSize, loops, isolateEquipmentLoop);
         if (!repaired || loops.size() == md->globalLoops.count) return 0;
 
@@ -239,7 +222,7 @@ namespace wxl::modern::assets::m2::textures
         if (!md || md->magic != fmt::kMagicMD20) return 0;
 
         std::vector<uint32_t> loops;
-        const bool isolateEquipmentLoop = ContainsCI(name, "item\\objectcomponents\\");
+        const bool isolateEquipmentLoop = text::ContainsCI(name, "item\\objectcomponents\\");
         const uint32_t repaired = BuildRepairedLoops(md, fileSize, loops, isolateEquipmentLoop);
         if (!repaired) return 0;
 
@@ -296,5 +279,12 @@ namespace wxl::modern::assets::m2::textures
                 ++result.toObjectSkin;
         }
         return result;
+    }
+
+    bool AllowsWeaponBladeRemap(std::string_view name)
+    {
+        if (text::StartsWithCI(name, "creature\\") || text::StartsWithCI(name, "character\\")) return true;
+        if (!text::StartsWithCI(name, "item\\objectcomponents\\")) return false;
+        return !text::StartsWithCI(name, "item\\objectcomponents\\weapon\\");
     }
 }

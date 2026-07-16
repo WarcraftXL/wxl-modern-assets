@@ -21,12 +21,14 @@
 #include "mpq/MpqStore.hpp"
 #include "structure/m2/M2Format.hpp"
 
+#include "../../../shared/common/Env.hpp"
+#include "../../../shared/common/Text.hpp"
 #include "../../../shared/models/m2/Textures.hpp"
 
 #include <cctype>
+#include <cstddef>
 #include <cstdio>
 #include <cstdlib>
-#include <cstring>
 #include <filesystem>
 #include <mutex>
 #include <sstream>
@@ -35,76 +37,45 @@
 
 namespace wxl::modern::assets::m2::equipment
 {
-    namespace fmt = wxl::structure::m2;
-    namespace tex = wxl::modern::assets::m2::textures;
+    namespace fmt  = wxl::structure::m2;
+    namespace tex  = wxl::modern::assets::m2::textures;
+    namespace text = wxl::modern::assets::common::text;
+    namespace env  = wxl::modern::assets::common::env;
 
     namespace
     {
-        constexpr uint32_t kBoneStride = 0x58;
-
-        bool StartsWithCI(std::string_view value, std::string_view prefix)
+#pragma pack(push, 1)
+        // A synthesized single-key translation track, appended past the model's original bytes and
+        // pointed to by one bone's M2CompBone::translation. The outer M2Array in translation.timestamps
+        // / translation.values always holds exactly one M2Array<T> descriptor (the pre-Legion per-sequence
+        // indirection this client's loader expects); that inner descriptor in turn holds the one actual
+        // keyframe this synth needs.
+        struct AppendedTranslationTrack
         {
-            if (prefix.size() > value.size()) return false;
-            for (size_t i = 0; i < prefix.size(); ++i)
-            {
-                const auto a = static_cast<unsigned char>(value[i] == '/' ? '\\' : value[i]);
-                const auto b = static_cast<unsigned char>(prefix[i]);
-                if (std::tolower(a) != std::tolower(b)) return false;
-            }
-            return true;
-        }
+            fmt::M2Array innerTimestamps; // 0x00 -> timestampValue
+            uint32_t     timestampValue;  // 0x08  (left at 0: the single key sits at t=0)
+            fmt::M2Array innerValues;     // 0x0C -> value
+            float        value[3];        // 0x14
+        };
+#pragma pack(pop)
+        static_assert(sizeof(AppendedTranslationTrack) == 0x20, "AppendedTranslationTrack");
 
-        bool EnvTruthy(const char* raw)
-        {
-            if (!raw || !*raw) return false;
-            const char c = static_cast<char>(std::tolower(static_cast<unsigned char>(*raw)));
-            return c != '0' && c != 'n' && c != 'f';
-        }
+        // Every playable race's 2-letter model-name code (e.g. "dr" = draenei); shared by HelmRaceId
+        // (which race a helm's "<code><m|f>" filename suffix names) and StripRaceGenderSuffix (which
+        // trailing "_<code><m|f>" a model rule key strips).
+        constexpr std::string_view kRaceCodes[] = {
+            "be", "dr", "dw", "gn", "hu", "ni", "or", "sc", "ta", "tr", "sk", "go"
+        };
 
-        bool VerboseAssetLogs()
+        bool IsRaceCode(std::string_view race)
         {
-            static const bool enabled = [] {
-                const char* raw = std::getenv("WXL_VERBOSE_ASSET_LOGS");
-                if (!raw || !*raw) raw = std::getenv("WXL_ASSET_LOGS");
-                return EnvTruthy(raw);
-            }();
-            return enabled;
-        }
-
-        bool AllowsObjectSkinRemapPath(std::string_view name)
-        {
-            if (StartsWithCI(name, "creature\\") || StartsWithCI(name, "character\\")) return true;
-            if (!StartsWithCI(name, "item\\objectcomponents\\")) return false;
-            return !StartsWithCI(name, "item\\objectcomponents\\weapon\\");
-        }
-
-        uint32_t Rd32(const uint8_t* p)
-        {
-            return uint32_t(p[0]) | (uint32_t(p[1]) << 8) | (uint32_t(p[2]) << 16) | (uint32_t(p[3]) << 24);
-        }
-
-        void Wr32(uint8_t* p, uint32_t v)
-        {
-            p[0] = uint8_t(v); p[1] = uint8_t(v >> 8); p[2] = uint8_t(v >> 16); p[3] = uint8_t(v >> 24);
-        }
-
-        void WrFloat(uint8_t* p, float v)
-        {
-            static_assert(sizeof(float) == 4);
-            std::memcpy(p, &v, sizeof(v));
-        }
-
-        std::string LowerSlashed(std::string_view name)
-        {
-            std::string s(name);
-            for (char& c : s)
-                c = c == '/' ? '\\' : static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-            return s;
+            for (const auto r : kRaceCodes) if (race == r) return true;
+            return false;
         }
 
         bool HelmRaceId(std::string_view name, std::string& id)
         {
-            const std::string s = LowerSlashed(name);
+            const std::string s = text::LowerSlashed(name);
             const size_t slash = s.find_last_of('\\');
             const size_t start = slash == std::string::npos ? 0 : slash + 1;
             const std::string_view base(s.data() + start, s.size() - start);
@@ -122,12 +93,7 @@ namespace wxl::modern::assets::m2::equipment
             else id.assign(base.substr(ext - 3, 3));
 
             if (id.size() != 3 || (id[2] != 'm' && id[2] != 'f')) return false;
-            static constexpr std::string_view races[] = {
-                "be", "dr", "dw", "gn", "hu", "ni", "or", "sc", "ta", "tr", "sk", "go"
-            };
-            for (const auto race : races)
-                if (std::string_view(id).substr(0, 2) == race) return true;
-            return false;
+            return IsRaceCode(std::string_view(id).substr(0, 2));
         }
 
         struct HelmOffsetRule
@@ -218,7 +184,7 @@ namespace wxl::modern::assets::m2::equipment
 
         std::string NormalizeRaceSex(std::string value)
         {
-            value = LowerSlashed(TrimCopy(value));
+            value = text::LowerSlashed(TrimCopy(value));
             std::string out;
             for (char c : value)
                 if (std::isalnum(static_cast<unsigned char>(c))) out.push_back(c);
@@ -231,15 +197,6 @@ namespace wxl::modern::assets::m2::equipment
             if (dot != std::string::npos && (value.substr(dot) == ".m2" || value.substr(dot) == ".mdx"))
                 value.resize(dot);
             return value;
-        }
-
-        bool IsRaceCode(std::string_view race)
-        {
-            static constexpr std::string_view races[] = {
-                "be", "dr", "dw", "gn", "hu", "ni", "or", "sc", "ta", "tr", "sk", "go"
-            };
-            for (const auto r : races) if (race == r) return true;
-            return false;
         }
 
         std::string StripRaceGenderSuffix(std::string stem)
@@ -268,7 +225,7 @@ namespace wxl::modern::assets::m2::equipment
 
         std::string NormalizeModelRuleKey(std::string_view value)
         {
-            return StripModelExtension(LowerSlashed(TrimCopy(std::string(value))));
+            return StripModelExtension(text::LowerSlashed(TrimCopy(std::string(value))));
         }
 
         uint32_t LoadHelmOffsetText(const char* source, const std::string& text)
@@ -350,8 +307,8 @@ namespace wxl::modern::assets::m2::equipment
                     {
                         if (ec) break;
                         if (!entry.is_directory(ec)) continue;
-                        const std::string folder = LowerSlashed(entry.path().filename().string());
-                        if (!StartsWithCI(folder, "patch-") || folder.find(".mpq") == std::string::npos) continue;
+                        const std::string folder = text::LowerSlashed(entry.path().filename().string());
+                        if (!text::StartsWithCI(folder, "patch-") || folder.find(".mpq") == std::string::npos) continue;
                         LoadHelmOffsetFile(entry.path() / "DBFilesClient" / "WXLHelmOffsets.csv");
                     }
                 }
@@ -411,37 +368,49 @@ namespace wxl::modern::assets::m2::equipment
             return true;
         }
 
+        struct HelmOffsetDefault { std::string_view id; float x, z; };
+
+        // Per-race/gender helm-bone offset, calibrated by eye against each race's head proportions.
+        // A race/gender with no entry here falls back to the human default at the table's end.
+        constexpr HelmOffsetDefault kHelmOffsetDefaults[] = {
+            { "drf", -0.0587258f, -0.195f },
+            { "drm", -0.0587258f, -0.245f },
+            { "taf", -0.13f,      -0.1f },
+            { "tam", -0.2f,       -0.1f },
+            { "nim", -0.09f,      -0.18f },
+            { "nif", -0.08f,      -0.195f },
+            { "orf", -0.08f,      -0.171f },
+            { "orm", -0.13f,      -0.21f },
+            { "trf", -0.0887258f, -0.08623257f },
+            { "trm", -0.13f,      -0.16f },
+            { "bef",  0.01f,      -0.2f },
+            { "bem", -0.08f,      -0.165f },
+            { "huf", -0.09f,      -0.18f },
+            { "scm", -0.12f,      -0.12623256f },
+            { "scf", -0.01f,      -0.15f },
+            { "gnf", -0.015f,     -0.263f },
+            { "gnm", -0.009f,     -0.23f },
+            { "dwm", -0.0227258f, -0.1725f },
+            { "dwf",  0.01f,      -0.195f },
+        };
+        constexpr HelmOffsetDefault kHelmOffsetHumanDefault{ "", -0.0587258f, -0.18623257f };
+
         void HelmOffsetForId(const std::string& id, float& x, float& z)
         {
-            x = -0.0587258f; z = -0.18623257f;
-            if (id == "drf") { x = -0.0587258f; z = -0.195f; }
-            else if (id == "drm") { x = -0.0587258f; z = -0.245f; }
-            else if (id == "taf") { x = -0.13f; z = -0.1f; }
-            else if (id == "tam") { x = -0.2f; z = -0.1f; }
-            else if (id == "nim") { x = -0.09f; z = -0.18f; }
-            else if (id == "nif") { x = -0.08f; z = -0.195f; }
-            else if (id == "orf") { x = -0.08f; z = -0.171f; }
-            else if (id == "orm") { x = -0.13f; z = -0.21f; }
-            else if (id == "trf") { x = -0.0887258f; z = -0.08623257f; }
-            else if (id == "trm") { x = -0.13f; z = -0.16f; }
-            else if (id == "bef") { x = 0.01f; z = -0.2f; }
-            else if (id == "bem") { x = -0.08f; z = -0.165f; }
-            else if (id == "huf") { x = -0.09f; z = -0.18f; }
-            else if (id == "scm") { x = -0.12f; z = -0.12623256f; }
-            else if (id == "scf") { x = -0.01f; z = -0.15f; }
-            else if (id == "gnf") { x = -0.015f; z = -0.263f; }
-            else if (id == "gnm") { x = -0.009f; z = -0.23f; }
-            else if (id == "dwm") { x = -0.0227258f; z = -0.1725f; }
-            else if (id == "dwf") { x = 0.01f; z = -0.195f; }
+            const HelmOffsetDefault* found = &kHelmOffsetHumanDefault;
+            for (const auto& entry : kHelmOffsetDefaults)
+                if (entry.id == id) { found = &entry; break; }
+            x = found->x;
+            z = found->z;
         }
     }
 
     void FixObjectSkinTextureTypes(std::string_view name, std::vector<uint8_t>& model)
     {
-        if (!AllowsObjectSkinRemapPath(name) || model.size() < sizeof(fmt::M2Header)) return;
+        if (!tex::AllowsWeaponBladeRemap(name) || model.size() < sizeof(fmt::M2Header)) return;
         auto* md = reinterpret_cast<fmt::M2Header*>(model.data());
         const auto patched = tex::FixWeaponBladeTextureTypes(md, static_cast<uint32_t>(model.size()));
-        if (patched.Total() && VerboseAssetLogs())
+        if (patched.Total() && env::VerboseAssetLogs())
             WLOG_INFO("modern-assets: %.*s fixed WEAPON_BLADE textures objectSkin=%u hardcoded=%u",
                       int(name.size()), name.data(), patched.toObjectSkin, patched.toHardcoded);
     }
@@ -454,31 +423,38 @@ namespace wxl::modern::assets::m2::equipment
         if (md->magic != fmt::kMagicMD20 || !md->bones.count || !md->bones.offset) return false;
         const uint32_t boneCount = md->bones.count;
         const uint32_t boneOffset = md->bones.offset;
-        const uint64_t bonesEnd = uint64_t(boneOffset) + uint64_t(boneCount) * kBoneStride;
+        const uint64_t bonesEnd = uint64_t(boneOffset) + uint64_t(boneCount) * sizeof(fmt::M2CompBone);
         if (bonesEnd > model.size() || bonesEnd < boneOffset ||
-            uint64_t(model.size()) + uint64_t(boneCount) * 32u > 0xffffffffu) return false;
+            uint64_t(model.size()) + uint64_t(boneCount) * sizeof(AppendedTranslationTrack) > 0xffffffffu)
+            return false;
 
         float x, z;
         HelmOffsetForId(id, x, z);
         float y = 0.0f;
         if (!ApplyHelmOffsetRule(name, id, x, y, z)) return false;
 
+        auto boneAt = [&](uint32_t i) {
+            return reinterpret_cast<fmt::M2CompBone*>(model.data() + boneOffset + i * sizeof(fmt::M2CompBone));
+        };
+
         for (uint32_t i = 0; i < boneCount; ++i)
         {
-            uint8_t* bone = model.data() + boneOffset + i * kBoneStride;
-            Wr32(bone + 0x04, Rd32(bone + 0x04) | 0x200u);
-            const uint32_t timestampArray = static_cast<uint32_t>(model.size());
-            model.resize(model.size() + 32, 0);
-            uint8_t* data = model.data() + timestampArray;
-            bone = model.data() + boneOffset + i * kBoneStride;
-            Wr32(bone + 0x14, 1); Wr32(bone + 0x18, timestampArray);
-            Wr32(data + 0x00, 1); Wr32(data + 0x04, timestampArray + 0x08);
-            const uint32_t valueArray = timestampArray + 0x0c;
-            Wr32(bone + 0x1c, 1); Wr32(bone + 0x20, valueArray);
-            Wr32(data + 0x0c, 1); Wr32(data + 0x10, valueArray + 0x08);
-            WrFloat(data + 0x14, x); WrFloat(data + 0x18, y); WrFloat(data + 0x1c, z);
+            boneAt(i)->flags |= fmt::kBoneFlagTransformed;
+
+            const uint32_t trackOffset = static_cast<uint32_t>(model.size());
+            model.resize(model.size() + sizeof(AppendedTranslationTrack), 0);
+            // model.data() may have moved: re-derive both pointers after the resize.
+            auto* bone = boneAt(i);
+            auto* track = reinterpret_cast<AppendedTranslationTrack*>(model.data() + trackOffset);
+
+            bone->translation.timestamps = { 1, trackOffset };
+            track->innerTimestamps = { 1, trackOffset + offsetof(AppendedTranslationTrack, timestampValue) };
+
+            bone->translation.values = { 1, trackOffset + offsetof(AppendedTranslationTrack, innerValues) };
+            track->innerValues = { 1, trackOffset + offsetof(AppendedTranslationTrack, value) };
+            track->value[0] = x; track->value[1] = y; track->value[2] = z;
         }
-        if (VerboseAssetLogs())
+        if (env::VerboseAssetLogs())
             WLOG_INFO("modern-assets: %.*s applied helm offset id=%s x=%g y=%g z=%g bones=%u",
                       int(name.size()), name.data(), id.c_str(), x, y, z, boneCount);
         return true;
