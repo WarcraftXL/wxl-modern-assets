@@ -66,8 +66,7 @@ namespace
         const uint32_t second = SecondChunkMagic(raw);
         if (second == mwmo::kMOHD)
         {
-            if (env::VerboseAssetLogs())
-                wxl::core::log::Printf("modern-wmo root: %.*s", int(name.size()), name.data());
+            WLOG_DEBUG("modern-wmo root: %.*s", int(name.size()), name.data());
             // Source WMOs name their textures directly (MOTX); a FileDataID-based source resolves through here.
             mwmo::ResolveCtx rc{ &ResolveThunk, nullptr };
             return mwmo::TranslateWmoRoot(raw, rc, out);
@@ -77,13 +76,13 @@ namespace
             // Diagnostic: the exterior terrain is culled when the camera is under a WMO group that lacks the
             // EXTERIOR flag (0x8). Log each group's flags + name so a culling-under-arch report can be tied to
             // the exact WMO group and its source flags. (MOGP flags = u32 at the 0x44 header +0x08.)
-            if (env::VerboseAssetLogs())
+            if (::wxl::log::Enabled(::wxl::log::Level::Debug))
             {
                 const uint32_t mverLen = 8 + iff::Rd32(raw.data() + 4);
                 if (mverLen + 8 + 0x0C <= raw.size())
                 {
                     const uint32_t flags = iff::Rd32(raw.data() + mverLen + 8 + 0x08);
-                    wxl::core::log::Printf("modern-wmo grp: %.*s flags=0x%08X ext=%d int=%d",
+                    WLOG_DEBUG("modern-wmo grp: %.*s flags=0x%08X ext=%d int=%d",
                         int(name.size()), name.data(), flags, int((flags & 0x8) != 0), int((flags & 0x2000) != 0));
                 }
             }

@@ -307,8 +307,8 @@ namespace wxl::modern::assets::wmo
                 if (remapped != shader)
                     ++collapsedShaders;
             }
-            wxl::core::log::Printf("wmo-mat: mats=%u collapsed=%u mat0 shader=%u tex1=%s tex2=%s",
-                matCount, collapsedShaders, dbgShader, dbgPath[0].c_str(), dbgPath[1].c_str());
+            WLOG_DEBUG("wmo-mat: mats=%u collapsed=%u mat0 shader=%u tex1=%s tex2=%s",
+                       matCount, collapsedShaders, dbgShader, dbgPath[0].c_str(), dbgPath[1].c_str());
         }
 
         // Doodad FileDataID -> name. Retail WMOs reference their doodad models by FileDataID (MODI) with an
@@ -346,8 +346,8 @@ namespace wxl::modern::assets::wmo
                 Wr32(e, (v & 0xFF000000u) | (off & 0x00FFFFFFu)); // keep doodad flags (high byte)
             }
             rebuiltDoodads = true;
-            wxl::core::log::Printf("wmo-doodad: MODI %u (resolved %u) -> MODN names, %u defs (blob %u B)",
-                nModi, resolved, nDefs, uint32_t(modn.data.size()));
+            WLOG_DEBUG("wmo-doodad: MODI %u (resolved %u) -> MODN names, %u defs (blob %u B)",
+                       nModi, resolved, nDefs, uint32_t(modn.data.size()));
         }
 
         // A MOTX must always exist (loader base pointer); an empty blob still needs one NUL.
