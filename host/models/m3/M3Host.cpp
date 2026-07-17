@@ -23,8 +23,10 @@
 #include "../../../shared/textures/dds/Dds.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <mutex>
@@ -64,6 +66,24 @@ namespace
         return s;
     }
 
+    // Loose-root presence, readable without the state mutex: -1 unscanned, 0 none, 1 present. The
+    // provider runs for EVERY file the client opens, so the no-drop-ins case must not take a lock.
+    std::atomic<int> g_looseState{ -1 };
+
+    /** @brief Cheap pre-filter: only model/skin/texture names can ever be m3 drop-ins. */
+    bool MightServe(std::string_view name)
+    {
+        auto endsWith = [&](const char* suffix) {
+            const size_t n = std::strlen(suffix);
+            if (n > name.size()) return false;
+            for (size_t i = 0; i < n; ++i)
+                if (std::tolower(static_cast<unsigned char>(name[name.size() - n + i])) != suffix[i])
+                    return false;
+            return true;
+        };
+        return endsWith(".m2") || endsWith(".skin") || endsWith(".blp");
+    }
+
     bool ReadWhole(const std::string& path, std::vector<uint8_t>& out)
     {
         std::ifstream f(path, std::ios::binary | std::ios::ate);
@@ -100,6 +120,7 @@ namespace
                 low.compare(low.size() - 4, 4, ".mpq") == 0)
                 s.looseRoots.push_back(it.path().string());
         }
+        g_looseState.store(s.looseRoots.empty() ? 0 : 1, std::memory_order_release);
         wxl::core::log::Printf("modern-m3: %u loose roots", unsigned(s.looseRoots.size()));
     }
 
@@ -282,12 +303,16 @@ namespace
 
     bool Provide(std::string_view name, std::vector<uint8_t>& out)
     {
+        if (!MightServe(name)) return false;
+        if (g_looseState.load(std::memory_order_acquire) == 0) return false;
+
         State& s = S();
         std::lock_guard<std::mutex> lock(s.mutex);
         ScanLooseRootsOnce();
         if (s.looseRoots.empty()) return false;
 
         const std::string key = m3::NormalizePath(std::string(name));
+        if (s.miss.count(key)) return false;
         const auto cached = s.cache.find(key);
         if (cached != s.cache.end())
         {
@@ -317,20 +342,29 @@ namespace
                 return true;
             }
         }
+        // Drop-ins are static for the session: remember the miss so the per-open cost of this name
+        // collapses to one hash lookup instead of repeated filesystem probes.
+        s.miss.emplace(key, true);
         return false;
     }
 
     bool Exists(std::string_view name)
     {
+        if (!MightServe(name)) return false;
+        if (g_looseState.load(std::memory_order_acquire) == 0) return false;
+
         State& s = S();
         std::lock_guard<std::mutex> lock(s.mutex);
         ScanLooseRootsOnce();
         if (s.looseRoots.empty()) return false;
 
         const std::string key = m3::NormalizePath(std::string(name));
+        if (s.miss.count(key)) return false;
         if (s.cache.count(key) || SourceFor(key) != SIZE_MAX) return true;
         std::string dds;
-        return TextureSource(key, dds);
+        if (TextureSource(key, dds)) return true;
+        s.miss.emplace(key, true);
+        return false;
     }
 
     struct Registrar

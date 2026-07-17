@@ -18,6 +18,7 @@
 #include "core/Logger.hpp"
 #include "structure/m2/M2Format.hpp"
 
+#include "../../../shared/common/Env.hpp"
 #include "../../../shared/common/Text.hpp"
 
 #include <cstdint>
@@ -50,8 +51,9 @@ namespace
         if (8 + size_t(payload) > raw.size()) return false;
 
         out.assign(raw.data() + 8, raw.data() + 8 + payload);
-        wxl::core::log::Printf("modern-anim: %.*s unwrapped (%u -> %u bytes)",
-            int(name.size()), name.data(), uint32_t(raw.size()), uint32_t(out.size()));
+        if (wxl::modern::assets::common::env::VerboseAssetLogs())
+            wxl::core::log::Printf("modern-anim: %.*s unwrapped (%u -> %u bytes)",
+                int(name.size()), name.data(), uint32_t(raw.size()), uint32_t(out.size()));
         return true;
     }
 

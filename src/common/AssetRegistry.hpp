@@ -18,48 +18,101 @@
 
 #pragma once
 
+#include <atomic>
+#include <cstdint>
 #include <shared_mutex>
-#include <unordered_set>
+#include <unordered_map>
 
 namespace wxl::modern::assets::common
 {
     /**
-     * @brief Thread-safe registry of live model pointers a module reshaped or otherwise owns.
+     * @brief Thread-safe registry of live model pointers a module reshaped or otherwise owns, with
+     *        per-model feature flags.
      *
-     * A load hook Remember()s a model; a free/replace path Forget()s it (guarding against a new
-     * model reusing a freed model's address); a draw or finalize hook queries Contains() to scope
-     * itself to instances this module actually touched.
+     * A load hook Remember()s a model with the flags describing its origin (hot-reshaped in memory,
+     * or file-tagged by the converter -- see shared/common/WxlTag.hpp); a free/replace path Forget()s
+     * it (guarding against a new model reusing a freed model's address); a draw or finalize hook
+     * queries Flags()/Contains() to scope itself to the instances and features actually concerned.
+     *
+     * Flags() is consulted at per-batch frequency, so it keeps two fast paths ahead of the lock:
+     * an atomic emptiness test (a session with no modern models pays one relaxed load per query),
+     * and a per-thread one-entry cache (consecutive batches of the same model pay two compares).
+     * The cache is invalidated by a generation counter bumped on every Remember/Forget.
      */
     class AssetRegistry
     {
     public:
-        /** @brief Registers a model pointer. @param model Runtime model pointer. */
-        void Remember(void* model)
+        // Registry-local flag: the model was reshaped in memory by this module (full modern contract,
+        // including the skin rebuild). File-tag flags (WxlTag.hpp) occupy the low bits.
+        static constexpr uint32_t kFlagHotReshaped = 0x80000000u;
+
+        /**
+         * @brief Registers a model pointer with its feature flags (merged if already present).
+         * @param model  Runtime model pointer.
+         * @param flags  Nonzero feature flags describing the model's origin/features.
+         */
+        void Remember(void* model, uint32_t flags)
         {
             std::unique_lock lock(mutex_);
-            set_.insert(model);
+            flags_[model] |= flags;
+            count_.store(flags_.size(), std::memory_order_relaxed);
+            generation_.fetch_add(1, std::memory_order_release);
         }
 
         /** @brief Drops a model pointer. @param model Runtime model pointer. */
         void Forget(void* model)
         {
             std::unique_lock lock(mutex_);
-            set_.erase(model);
+            flags_.erase(model);
+            count_.store(flags_.size(), std::memory_order_relaxed);
+            generation_.fetch_add(1, std::memory_order_release);
+        }
+
+        /** @brief Reports whether no model is registered at all. Safe on any hot path. */
+        bool Empty() const
+        {
+            return count_.load(std::memory_order_relaxed) == 0;
         }
 
         /**
-         * @brief Queries whether a model pointer is registered.
+         * @brief Returns a model's registered feature flags, or 0 when the model is unknown.
+         * @param model Runtime model pointer.
+         * @return the flags passed to Remember(), or 0.
+         */
+        uint32_t Flags(void* model) const
+        {
+            if (Empty()) return 0;
+
+            struct Cached { const AssetRegistry* reg; void* model; uint32_t generation; uint32_t flags; };
+            thread_local Cached cached{};
+            const uint32_t generation = generation_.load(std::memory_order_acquire);
+            if (cached.reg == this && cached.model == model && cached.generation == generation)
+                return cached.flags;
+
+            uint32_t flags = 0;
+            {
+                std::shared_lock lock(mutex_);
+                auto it = flags_.find(model);
+                if (it != flags_.end()) flags = it->second;
+            }
+            cached = { this, model, generation, flags };
+            return flags;
+        }
+
+        /**
+         * @brief Queries whether a model pointer is registered (any origin).
          * @param model Runtime model pointer.
          * @return true if Remember() was called for this pointer and Forget() has not since.
          */
         bool Contains(void* model) const
         {
-            std::shared_lock lock(mutex_);
-            return set_.find(model) != set_.end();
+            return Flags(model) != 0;
         }
 
     private:
         mutable std::shared_mutex mutex_;
-        std::unordered_set<void*> set_;
+        std::unordered_map<void*, uint32_t> flags_;
+        std::atomic<size_t> count_{ 0 };
+        std::atomic<uint32_t> generation_{ 0 };
     };
 }

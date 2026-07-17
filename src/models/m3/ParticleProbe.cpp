@@ -50,12 +50,20 @@ namespace wxl::modern::assets::m3
 
     /**
      * @brief Once-per-second dump of the live emitter state of the probed model.
+     *
+     * Opt-in via WXL_PARTICLE_PROBE: unarmed, its per-frame handler is never subscribed, so the
+     * per-visible-M2 name scan costs nothing in normal play.
      */
     class ParticleProbe final : public events::EventScript
     {
     public:
         ParticleProbe()
         {
+            char env[8]{};
+            const DWORD n = GetEnvironmentVariableA("WXL_PARTICLE_PROBE", env, sizeof env);
+            const bool armed = n > 0 && env[0] != '0' && env[0] != 'n' && env[0] != 'N' &&
+                               env[0] != 'f' && env[0] != 'F';
+            if (!armed) return;
             on<&ParticleProbe::OnPerFrame>(ev::Event::OnM2PerFrameUpdate);
             WLOG_INFO("m3-probe: armed (per-frame emitter state, felstalker)");
         }

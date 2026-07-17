@@ -18,6 +18,7 @@
 #include "core/Logger.hpp"
 
 #include "../../../shared/common/Chunk.hpp"
+#include "../../../shared/common/Env.hpp"
 #include "../../../shared/common/Text.hpp"
 #include "../../../shared/models/wmo/WmoChunks.hpp"
 #include "../../../shared/models/wmo/WmoTranslate.hpp"
@@ -35,6 +36,7 @@ namespace
     namespace mwmo = wxl::modern::assets::wmo;
     namespace iff  = wxl::modern::assets::common::iff;
     namespace text = wxl::modern::assets::common::text;
+    namespace env  = wxl::modern::assets::common::env;
 
     // Magic of the chunk that follows MVER: MOHD for a root, MOGP for a group, 0 if unreadable.
     uint32_t SecondChunkMagic(std::span<const uint8_t> raw)
@@ -64,7 +66,8 @@ namespace
         const uint32_t second = SecondChunkMagic(raw);
         if (second == mwmo::kMOHD)
         {
-            wxl::core::log::Printf("modern-wmo root: %.*s", int(name.size()), name.data());
+            if (env::VerboseAssetLogs())
+                wxl::core::log::Printf("modern-wmo root: %.*s", int(name.size()), name.data());
             // Source WMOs name their textures directly (MOTX); a FileDataID-based source resolves through here.
             mwmo::ResolveCtx rc{ &ResolveThunk, nullptr };
             return mwmo::TranslateWmoRoot(raw, rc, out);
@@ -74,12 +77,15 @@ namespace
             // Diagnostic: the exterior terrain is culled when the camera is under a WMO group that lacks the
             // EXTERIOR flag (0x8). Log each group's flags + name so a culling-under-arch report can be tied to
             // the exact WMO group and its source flags. (MOGP flags = u32 at the 0x44 header +0x08.)
-            const uint32_t mverLen = 8 + iff::Rd32(raw.data() + 4);
-            if (mverLen + 8 + 0x0C <= raw.size())
+            if (env::VerboseAssetLogs())
             {
-                const uint32_t flags = iff::Rd32(raw.data() + mverLen + 8 + 0x08);
-                wxl::core::log::Printf("modern-wmo grp: %.*s flags=0x%08X ext=%d int=%d",
-                    int(name.size()), name.data(), flags, int((flags & 0x8) != 0), int((flags & 0x2000) != 0));
+                const uint32_t mverLen = 8 + iff::Rd32(raw.data() + 4);
+                if (mverLen + 8 + 0x0C <= raw.size())
+                {
+                    const uint32_t flags = iff::Rd32(raw.data() + mverLen + 8 + 0x08);
+                    wxl::core::log::Printf("modern-wmo grp: %.*s flags=0x%08X ext=%d int=%d",
+                        int(name.size()), name.data(), flags, int((flags & 0x8) != 0), int((flags & 0x2000) != 0));
+                }
             }
             return mwmo::TranslateWmoGroup(raw, out);
         }

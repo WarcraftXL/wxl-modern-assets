@@ -20,6 +20,7 @@
 #include "game/m2/M2.hpp"
 #include "structure/m2/M2Format.hpp"
 
+#include "../../../shared/common/WxlTag.hpp"
 #include "../../../shared/models/m2/Contract.hpp"
 #include "../../../shared/models/m2/Downport.hpp"
 #include "../../../shared/models/m2/Particles.hpp"
@@ -107,7 +108,19 @@ namespace wxl::modern::assets::m2
         {
             RemapWeaponBladeTextures(a.model, md, size);
             md->version &= ~kStagedVersionBit;
-            registry_.Remember(a.model);
+            registry_.Remember(a.model, common::AssetRegistry::kFlagHotReshaped);
+            return;
+        }
+
+        // Pre-converted file (cold converter output): already on the client contract, discriminated from
+        // truly native content only by its WXLC trailer. Register it with the tag's flags so the draw-time
+        // fixups the converter cannot bake (device state like the alpha-key ref) still scope to it -- the
+        // skin rebuild does NOT run for these (the converter already resolved the material contract).
+        uint32_t tagFlags = 0;
+        if (wxl::modern::assets::common::tag::Read(static_cast<const uint8_t*>(buf), size, tagFlags) &&
+            tagFlags != 0)
+        {
+            registry_.Remember(a.model, tagFlags & ~common::AssetRegistry::kFlagHotReshaped);
             return;
         }
 
@@ -141,7 +154,7 @@ namespace wxl::modern::assets::m2
         auto* imageHeader = static_cast<fmt::M2Header*>(image);
         RemapWeaponBladeTextures(a.model, imageHeader, workSize);
         imageHeader->version &= ~kStagedVersionBit;
-        registry_.Remember(a.model);
+        registry_.Remember(a.model, common::AssetRegistry::kFlagHotReshaped);
         WLOG_INFO("modern-m2: reshaped M2 to 264 (%u -> %u bytes)", size, workSize);
     }
 
@@ -179,7 +192,12 @@ namespace wxl::modern::assets::m2
         if (split)
             WLOG_INFO("modern-assets: bone-splitter produced %u extra sub-draw(s)", splitCount);
 
-        if (registry_.Contains(a.model) && SkinRebuildEnabled())
+        // The rebuild assumes the source's packed shaderId encoding, which only an in-memory reshape leaves
+        // behind -- a cold-converted (tagged) model already carries the resolved contract and must not be
+        // rebuilt, only structurally repointed like native content when a split occurred.
+        const bool hotReshaped =
+            (registry_.Flags(a.model) & common::AssetRegistry::kFlagHotReshaped) != 0;
+        if (hotReshaped && SkinRebuildEnabled())
             skin::Rebuild(md, sk, splitMap, pathStem ? pathStem : ""); // full modern-M2 contract rebuild
         else if (split)
             bn::RepointBatchesAfterSplit(sk, splitMap); // native / other-origin content: structural repoint only
