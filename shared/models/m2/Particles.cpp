@@ -66,8 +66,7 @@ namespace wxl::modern::assets::m2::particles
 
         // The lowered alpha-key cutoff for source content: the coverage midpoint where source leaf / foliage
         // coverage-alpha sits. blend mode 1 = alpha key (the only mode the lowered reference applies to).
-        constexpr float    kSourceAlphaKeyRef = 0.5f;
-        constexpr uint16_t kBlendAlphaKey     = 1;
+        constexpr float kSourceAlphaKeyRef = 0.5f;
     }
 
     /**

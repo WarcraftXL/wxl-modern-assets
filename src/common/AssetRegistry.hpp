@@ -63,7 +63,10 @@ namespace wxl::modern::assets::common
         void Forget(void* model)
         {
             std::unique_lock lock(mutex_);
-            flags_.erase(model);
+            // Every model load Forgets defensively, including non-modern models: erasing nothing
+            // must not bump the generation, or streaming churn invalidates the render thread's
+            // per-batch cache for no reason.
+            if (flags_.erase(model) == 0) return;
             count_.store(flags_.size(), std::memory_order_relaxed);
             generation_.fetch_add(1, std::memory_order_release);
         }

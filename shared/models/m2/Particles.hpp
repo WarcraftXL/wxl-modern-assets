@@ -35,6 +35,10 @@
  */
 namespace wxl::modern::assets::m2::particles
 {
+    /// Blend mode 1 = alpha key — the only mode the lowered source cutoff applies to. Public so
+    /// draw-frequency callers can test it BEFORE paying any per-batch lookup.
+    inline constexpr uint16_t kBlendAlphaKey = 1;
+
     /**
      * @brief Compacts every source emitter onto the client stride in place and normalizes its
      *        source-only encodings.

@@ -209,6 +209,10 @@ namespace wxl::modern::assets::m2
      */
     void ModernM2::OnSetupBatchAlpha(const ev::M2SetupBatchAlphaArgs& a)
     {
+        // Alpha-key batches are a small minority of the scene; test the blend mode before paying
+        // the registry lookup, which otherwise costs a shared-lock + hash find on EVERY batch of
+        // every visible model.
+        if (a.blendMode != particles::kBlendAlphaKey) return;
         particles::OnSetupBatchAlpha(a, registry_.Contains(a.model));
     }
 
